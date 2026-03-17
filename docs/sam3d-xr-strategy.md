@@ -80,6 +80,38 @@ This gives us a clear boundary between XR interaction logic and server communica
 
 The browser should stay thin. The backend should own generation state and latent memory.
 
+We should explicitly separate:
+
+- artifact delivery, which is how the frontend gets a renderable `glb`,
+- and state identity, which is how the frontend refers back to backend memory later.
+
+Recommended backend identifiers:
+
+- `jobId`
+  Tracks a long-running generation or recomposition request.
+- `sessionId`
+  Identifies the current live client session. This can be temporary and is useful for in-memory server context.
+- `workspaceId`
+  Identifies a saved workspace snapshot that can be reloaded later.
+- `assetId`
+  Identifies one generated object in the user's workspace.
+- `latentHandle`
+  Identifies backend-owned latent or structured generation memory associated with an asset.
+
+Recommended backend artifact fields:
+
+- `glbUrl`
+  A URL that the frontend can load immediately into the headset.
+- `thumbnailUrl`
+  Optional preview artifact for UI panels and saved-workspace browsing.
+
+Recommended rule:
+
+- return both `glbUrl` and `assetId` for rendering and frontend state,
+- and return `latentHandle` for future backend edits and recomposition.
+
+This is better than choosing only one mechanism. The `glbUrl` solves rendering. The `latentHandle` solves later editing.
+
 ### Generate Request
 
 Suggested request payload:
@@ -100,36 +132,74 @@ Suggested request payload:
 }
 ```
 
-Suggested response payload:
+Suggested initial response payload:
 
 ```json
 {
-  "assetId": "asset-001",
-  "glbUrl": "/artifacts/asset-001.glb",
-  "thumbnailUrl": "/artifacts/asset-001.jpg",
-  "metadata": {
-    "prompt": "Generate this coffee mug"
+  "jobId": "job-001",
+  "status": "queued",
+  "sessionId": "xr-session-123"
+}
+```
+
+Suggested final job result payload:
+
+```json
+{
+  "jobId": "job-001",
+  "status": "completed",
+  "sessionId": "xr-session-123",
+  "workspaceId": "workspace-001",
+  "asset": {
+    "assetId": "asset-001",
+    "glbUrl": "/artifacts/asset-001.glb",
+    "thumbnailUrl": "/artifacts/asset-001.jpg",
+    "latentHandle": "latent-asset-001",
+    "metadata": {
+      "prompt": "Generate this coffee mug"
+    }
   }
 }
 ```
 
-If the backend needs time to generate, we should prefer:
+Because generation can take up to a couple of minutes, we should prefer:
 
-- `POST /generate`
-- `GET /jobs/:id`
-- or a WebSocket progress stream
+- `POST /generate` to create a job,
+- `GET /jobs/:jobId` to poll for completion,
+- and optionally a WebSocket progress stream later
 
 instead of a single long blocking request.
+
+Recommended job states:
+
+- `queued`
+- `running`
+- `completed`
+- `failed`
+
+Optional progress payload while running:
+
+```json
+{
+  "jobId": "job-001",
+  "status": "running",
+  "progress": 0.65,
+  "message": "Decoding mesh"
+}
+```
 
 ### Save Workspace Request
 
 ```json
 {
   "sessionId": "xr-session-123",
+  "workspaceId": "workspace-001",
   "workspace": {
     "assets": [
       {
         "assetId": "asset-001",
+        "latentHandle": "latent-asset-001",
+        "glbUrl": "/artifacts/asset-001.glb",
         "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.1, 1.2, -0.8, 1],
         "selections": [
           {
@@ -143,19 +213,29 @@ instead of a single long blocking request.
 }
 ```
 
+Recommended interpretation:
+
+- `sessionId` identifies the live frontend/backend conversation,
+- `workspaceId` identifies the saved scene state,
+- `assetId` identifies the object in the workspace,
+- `latentHandle` allows the backend to reconnect the saved asset to its internal generation memory.
+
 ### Combine / Decode Request
 
 ```json
 {
   "sessionId": "xr-session-123",
+  "workspaceId": "workspace-001",
   "sourceAssets": [
     {
       "assetId": "asset-001",
+      "latentHandle": "latent-asset-001",
       "transform": [ ... ],
       "selectedVertexIndices": [ ... ]
     },
     {
       "assetId": "asset-002",
+      "latentHandle": "latent-asset-002",
       "transform": [ ... ],
       "selectedVertexIndices": [ ... ]
     }
@@ -166,7 +246,8 @@ instead of a single long blocking request.
 Response:
 
 - new `assetId`
-- new generated `glb`
+- new generated `glbUrl`
+- new `latentHandle`
 - optional updated workspace snapshot
 
 ## Scene Data Model
@@ -357,13 +438,37 @@ Recommended persistence model:
 - backend stores both workspace metadata and latent references,
 - frontend reloads by requesting a workspace snapshot from the backend.
 
+Recommended identity model:
+
+- `sessionId`
+  The current live editing session in the browser. This may expire and does not need to be the primary saved-state key.
+- `workspaceId`
+  The stable ID used for save/load operations.
+- `assetId`
+  The stable ID for each placed object in the workspace.
+- `latentHandle`
+  A backend-facing reference that connects saved assets to structured latent memory or other internal generation state.
+
+Practical rule:
+
+- save and load by `workspaceId`,
+- keep `sessionId` for live requests,
+- and persist `assetId` plus `latentHandle` inside the workspace snapshot.
+
 Workspace snapshot should include:
 
 - asset IDs,
-- artifact URLs or handles,
+- artifact URLs,
+- latent handles,
 - transforms,
 - selections,
 - parent/child composition metadata later on.
+
+This gives us a useful separation of responsibilities:
+
+- the frontend can always render from `glbUrl`,
+- the backend can always edit from `latentHandle`,
+- and the overall scene can be restored from `workspaceId`.
 
 ## Phase Plan
 
@@ -377,8 +482,9 @@ Scope:
 
 - screenshot capture,
 - prompt input,
-- backend generate call,
-- `glb` return,
+- job-based backend generate call,
+- polling for completion,
+- `glbUrl` return,
 - place generated mesh in XR,
 - move/rotate/scale mesh,
 - save/load one asset record.
@@ -434,14 +540,17 @@ Before any selection work, we should build a narrow but complete end-to-end demo
 1. Capture screenshot from XR.
 2. Enter prompt.
 3. Send both to a stub or real SAM3D endpoint.
-4. Receive a test `glb`.
-5. Load it into an editable asset wrapper.
-6. Move/rotate/scale it in the scene.
-7. Save and reload that one asset via backend persistence.
+4. Receive a `jobId`.
+5. Poll for completion.
+6. Receive `assetId`, `glbUrl`, and `latentHandle`.
+7. Load the `glb` into an editable asset wrapper.
+8. Move/rotate/scale it in the scene.
+9. Save and reload that one asset via backend persistence.
 
 This will validate:
 
 - networking,
+- long-running job UX,
 - asset loading,
 - interaction model,
 - backend session handling,
@@ -449,12 +558,36 @@ This will validate:
 
 If we skip this and jump straight to selections, we risk building selection logic before the asset lifecycle is stable.
 
+## Mock Backend
+
+We should create a small Python mock backend early in development.
+
+This is valuable even if the real SAM3D service is already planned, because it lets us unblock frontend work and test the XR flow before generation is ready or stable.
+
+Recommended responsibilities for the mock backend:
+
+- accept `POST /generate`,
+- return a `jobId`,
+- simulate a delayed long-running job,
+- return a fixed test `glbUrl`,
+- assign synthetic `assetId`, `workspaceId`, and `latentHandle` values,
+- implement basic `save` and `load` endpoints for workspace snapshots.
+
+Suggested phase-1 behavior:
+
+- store workspace state in Python memory,
+- optionally write uploaded images and saved workspace JSON to disk for debugging,
+- serve one or two static `glb` files from a local artifacts folder,
+- simulate progress over 10 to 30 seconds so the frontend can exercise loading states.
+
+This mock backend should not try to emulate SAM3D internals. It only needs to validate the frontend contract and state lifecycle.
+
 ## Open Questions
 
 These are the main questions we should answer before implementation:
 
 1. Does the SAM3D backend want raw image pixels, JPEG/PNG, or a URL upload flow?
-2. Will generation be synchronous, queued, or streamed with progress?
+2. Will generation expose only polling, or polling plus pushed progress events?
 3. Can one generated asset contain multiple named submeshes that we can address stably?
 4. Does the backend expect vertex indices against the decoded mesh, latent structure, or both?
 5. Do we need triangle-face selection instead of only vertex selection?
@@ -470,9 +603,11 @@ Implement a new sample focused on the phase-1 vertical slice and keep it intenti
 - toolbar,
 - screenshot preview,
 - prompt entry,
-- backend generate call,
-- returned `glb`,
+- job-based backend generate call,
+- polling and progress UI,
+- returned `glbUrl`,
 - editable asset wrapper,
-- save/load.
+- save/load,
+- and a Python mock backend for early testing.
 
 Once that loop feels stable in-headset, we add selection as a second milestone instead of mixing both concerns immediately.
