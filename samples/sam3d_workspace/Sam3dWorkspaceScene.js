@@ -5,6 +5,7 @@ import {Sam3dApiClient} from './Sam3dApiClient.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
+const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -201,10 +202,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
   async captureScreenshot() {
     this.setStatus('Capturing screenshot...');
     try {
-      const image = await xb.core.screenshotSynthesizer.getScreenshot(true);
+      const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
+      const image = await xb.core.screenshotSynthesizer.getScreenshot(
+        useCameraOverlay
+      );
       this.lastScreenshotDataUrl = image;
       this.previewImage.load(image);
-      this.setStatus('Screenshot captured and attached to the current request.');
+      this.setStatus(
+        useCameraOverlay
+          ? 'Camera-overlay screenshot captured.'
+          : 'Scene screenshot captured.'
+      );
     } catch (error) {
       console.error('Failed to capture screenshot.', error);
       this.setStatus('Screenshot capture failed.');
@@ -418,4 +426,5 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Workspace reset.');
   }
 }
+
 
