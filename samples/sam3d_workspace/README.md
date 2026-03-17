@@ -9,6 +9,7 @@ This sample is intentionally narrow. It validates:
 
 - screenshot capture from XR,
 - prompt capture through speech recognition,
+- visible microphone capability diagnostics,
 - a job-based generation flow,
 - loading a returned model into an editable `ModelViewer`,
 - and temporary save/load of a single asset record.
@@ -67,3 +68,4 @@ Replace the scaffold client with a Python mock backend that exposes:
 - `GET /jobs/:jobId`
 - `POST /workspaces/:workspaceId/save`
 - `GET /workspaces/:workspaceId`
+

@@ -6,6 +6,30 @@ import {Sam3dApiClient} from './Sam3dApiClient.js';
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
+const SAMPLE_VERSION = 'ui-debug-v4';
+
+const PANEL_WIDTH = 1.0;
+const PANEL_HEIGHT = 1.4;
+const PANEL_Y_OFFSET = 0.04;
+
+const TITLE_FONT_DP = 20;
+const BODY_FONT_DP = 16;
+const FOOTER_FONT_DP = 16;
+const BUTTON_FONT_DP = 22;
+const BUTTON_FONT_DP_WIDE = 22;
+const MIC_DIAGNOSTICS_FONT_DP = 22;
+
+const ACTION_BUTTON_HEIGHT = 0.25;
+const SECONDARY_BUTTON_HEIGHT = 0.25;
+
+const ROW_WEIGHT_TITLE = 0.05;
+const ROW_WEIGHT_STATUS = 0.08;
+const ROW_WEIGHT_PROMPT = 0.12;
+const ROW_WEIGHT_ACTION = 0.08;
+const ROW_WEIGHT_MIC = 0.18;
+const ROW_WEIGHT_PREVIEW = 0.3;
+const ROW_WEIGHT_SAVE = 0.08;
+const ROW_WEIGHT_FOOTER = 0.08;
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -36,6 +60,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.addLights();
     this.createWorkspaceUI();
     this.bindSpeechRecognizer();
+    this.updateMicDiagnostics();
     this.refreshPromptText();
     this.setStatus(
       'Ready. Capture a screenshot, record a prompt, and generate an asset.'
@@ -51,98 +76,147 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   createWorkspaceUI() {
     this.panel = new xb.SpatialPanel({
-      width: 1.2,
-      height: 1.0,
+      width: PANEL_WIDTH,
+      height: PANEL_HEIGHT,
       backgroundColor: '#111827F0',
       useDefaultPosition: false,
     });
     this.panel.isRoot = true;
-    this.panel.position.set(0, xb.user.height + 0.05, -1.0);
+    this.panel.position.set(0, xb.user.height + PANEL_Y_OFFSET, -1.0);
     this.add(this.panel);
 
     const grid = this.panel.addGrid();
 
-    grid.addRow({weight: 0.12}).addText({
+    grid.addRow({weight: ROW_WEIGHT_TITLE}).addText({
       text: 'SAM3D Workspace',
-      fontSize: 0.065,
+      fontSizeDp: TITLE_FONT_DP,
       fontColor: '#d1fae5',
     });
 
-    this.statusText = grid.addRow({weight: 0.1}).addText({
+    this.statusText = grid.addRow({weight: ROW_WEIGHT_STATUS}).addText({
       text: 'Initializing...',
-      fontSize: 0.04,
+      fontSizeDp: BODY_FONT_DP,
       fontColor: '#fde68a',
       anchorX: 'left',
     });
 
-    this.promptText = grid.addRow({weight: 0.12}).addText({
+    this.promptText = grid.addRow({weight: ROW_WEIGHT_PROMPT}).addText({
       text: '',
-      fontSize: 0.04,
+      fontSizeDp: BODY_FONT_DP,
       fontColor: '#bfdbfe',
       anchorX: 'left',
       anchorY: 'top',
     });
 
-    const actionsRow = grid.addRow({weight: 0.14});
-    const captureButton = actionsRow.addCol({weight: 0.25}).addTextButton({
+    const actionsRowTop = grid.addRow({weight: ROW_WEIGHT_ACTION});
+    const captureButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
       text: 'Capture',
       backgroundColor: '#0f766e',
       fontColor: '#ffffff',
-      fontSize: 0.05,
+      fontSizeDp: BUTTON_FONT_DP,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
     });
     captureButton.onTriggered = () => this.captureScreenshot();
 
-    this.recordButton = actionsRow.addCol({weight: 0.25}).addTextButton({
+    this.recordButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
       text: 'Record Prompt',
       backgroundColor: '#7c2d12',
       fontColor: '#ffffff',
-      fontSize: 0.043,
+      fontSizeDp: BUTTON_FONT_DP_WIDE,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
     });
     this.recordButton.onTriggered = () => this.togglePromptRecording();
 
-    const generateButton = actionsRow.addCol({weight: 0.25}).addTextButton({
+    const generateButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
       text: 'Generate',
       backgroundColor: '#1d4ed8',
       fontColor: '#ffffff',
-      fontSize: 0.05,
+      fontSizeDp: BUTTON_FONT_DP,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
     });
     generateButton.onTriggered = () => this.generateAsset();
 
-    const resetButton = actionsRow.addCol({weight: 0.25}).addTextButton({
+    const actionsRowBottom = grid.addRow({weight: ROW_WEIGHT_ACTION});
+    const resetButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
       text: 'Reset',
       backgroundColor: '#4b5563',
       fontColor: '#ffffff',
-      fontSize: 0.05,
+      fontSizeDp: BUTTON_FONT_DP,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
     });
     resetButton.onTriggered = () => this.resetWorkspace();
 
-    const previewRow = grid.addRow({weight: 0.34});
+    this.testMicButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Test Mic',
+      backgroundColor: '#92400e',
+      fontColor: '#ffffff',
+      fontSizeDp: BUTTON_FONT_DP_WIDE,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
+    });
+    this.testMicButton.onTriggered = () => this.runMicCapabilityTest();
+
+    const loadButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Load',
+      backgroundColor: '#4338ca',
+      fontColor: '#ffffff',
+      fontSizeDp: BUTTON_FONT_DP,
+      opacity: 0.95,
+      height: ACTION_BUTTON_HEIGHT,
+    });
+    loadButton.onTriggered = () => this.loadWorkspace();
+
+    const micRow = grid.addRow({weight: ROW_WEIGHT_MIC});
+    const micStatusCol = micRow.addCol({weight: 1.0});
+    this.micDiagnosticsText = micStatusCol.addText({
+      text: 'Mic diagnostics: checking...',
+      fontSizeDp: MIC_DIAGNOSTICS_FONT_DP,
+      fontColor: '#fbcfe8',
+      anchorX: 'left',
+      anchorY: 'top',
+    });
+
+    const previewRow = grid.addRow({weight: ROW_WEIGHT_PREVIEW});
     this.previewImage = previewRow.addImage({
       src: '',
       paddingX: 0.03,
       paddingY: 0.03,
     });
 
-    const saveLoadRow = grid.addRow({weight: 0.14});
+    const saveLoadRow = grid.addRow({weight: ROW_WEIGHT_SAVE});
     const saveButton = saveLoadRow.addCol({weight: 0.5}).addTextButton({
       text: 'Save Workspace',
       backgroundColor: '#065f46',
       fontColor: '#ffffff',
-      fontSize: 0.046,
+      fontSizeDp: BUTTON_FONT_DP_WIDE,
+      opacity: 0.95,
+      height: SECONDARY_BUTTON_HEIGHT,
     });
     saveButton.onTriggered = () => this.saveWorkspace();
 
-    const loadButton = saveLoadRow.addCol({weight: 0.5}).addTextButton({
-      text: 'Load Workspace',
-      backgroundColor: '#4338ca',
+    const clearButton = saveLoadRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Clear Preview',
+      backgroundColor: '#374151',
       fontColor: '#ffffff',
-      fontSize: 0.046,
+      fontSizeDp: BUTTON_FONT_DP_WIDE,
+      opacity: 0.95,
+      height: SECONDARY_BUTTON_HEIGHT,
     });
-    loadButton.onTriggered = () => this.loadWorkspace();
+    clearButton.onTriggered = () => {
+      this.lastScreenshotDataUrl = '';
+      this.previewImage.load('');
+      this.setStatus('Screenshot preview cleared.');
+    };
 
-    grid.addRow({weight: 0.08}).addText({
-      text: 'Phase 1 scaffold: screenshot, prompt, job polling, editable asset, save/load.',
-      fontSize: 0.032,
+    grid.addRow({weight: ROW_WEIGHT_FOOTER}).addText({
+      text:
+        'Version: ' + SAMPLE_VERSION + '\n' +
+        'Phase 1 scaffold: screenshot, prompt, mic diagnostics, job polling, editable asset, save/load.',
+      fontSizeDp: FOOTER_FONT_DP,
       fontColor: '#9ca3af',
       anchorX: 'left',
     });
@@ -171,6 +245,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     recognizer.addEventListener('error', (event) => {
       this.isRecordingPrompt = false;
       this.updateRecordButton();
+      this.updateMicDiagnostics(`Speech error: ${event.error}`);
       this.setStatus(`Speech error: ${event.error}`);
     });
 
@@ -184,6 +259,23 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.promptText) {
       this.promptText.text = `Prompt: ${this.currentPrompt}`;
     }
+  }
+
+  updateMicDiagnostics(extraMessage = '') {
+    if (!this.micDiagnosticsText) return;
+    const hasMediaDevices = !!navigator.mediaDevices?.getUserMedia;
+    const hasSpeechRecognition =
+      'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
+    const recognizerReady = !!xb.core.sound.speechRecognizer;
+
+    const summary =
+      `Mic API: ${hasMediaDevices ? 'yes' : 'no'} | ` +
+      `Speech API: ${hasSpeechRecognition ? 'yes' : 'no'} | ` +
+      `Recognizer: ${recognizerReady ? 'yes' : 'no'}`;
+
+    this.micDiagnosticsText.text = extraMessage
+      ? `${summary}\n${extraMessage}`
+      : summary;
   }
 
   updateRecordButton() {
@@ -223,6 +315,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
       this.setStatus('Speech recognition is unavailable in this browser.');
+      this.updateMicDiagnostics('No recognizer instance is available.');
       return;
     }
 
@@ -232,10 +325,42 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus('Stopped listening for prompt.');
     } else {
       this.isRecordingPrompt = true;
+      this.updateMicDiagnostics('Speech recognizer start requested.');
       this.setStatus('Listening for prompt...');
       recognizer.start();
     }
     this.updateRecordButton();
+  }
+
+  async runMicCapabilityTest() {
+    this.setStatus('Requesting microphone access...');
+    this.updateMicDiagnostics('Testing microphone access...');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.updateMicDiagnostics('getUserMedia is not available in this browser.');
+      this.setStatus('Microphone API is unavailable.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      const trackLabels = stream
+        .getAudioTracks()
+        .map((track) => track.label || 'unlabeled-track');
+      stream.getTracks().forEach((track) => track.stop());
+
+      const labelSummary =
+        trackLabels.length > 0 ? trackLabels.join(', ') : 'audio track opened';
+      this.updateMicDiagnostics(`Mic test passed: ${labelSummary}`);
+      this.setStatus(
+        'Microphone access succeeded. Speech API may still be unsupported.'
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown mic test failure';
+      this.updateMicDiagnostics(`Mic test failed: ${message}`);
+      this.setStatus(`Microphone test failed: ${message}`);
+    }
   }
 
   async generateAsset() {
@@ -423,8 +548,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.remove(this.activeModelViewer);
       this.activeModelViewer = null;
     }
+    this.updateMicDiagnostics();
     this.setStatus('Workspace reset.');
   }
 }
+
 
 
