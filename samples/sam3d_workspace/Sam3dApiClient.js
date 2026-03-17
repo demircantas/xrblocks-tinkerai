@@ -13,15 +13,47 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseDataUrl(dataUrl) {
+  if (!dataUrl || !dataUrl.startsWith('data:') || !dataUrl.includes(',')) {
+    return {
+      mimeType: 'application/octet-stream',
+      dataUrl: dataUrl || '',
+    };
+  }
+
+  const [header] = dataUrl.split(',', 1);
+  const mimeType = header.split(';', 1)[0].replace('data:', '');
+  return {
+    mimeType,
+    dataUrl,
+  };
+}
+
 export class Sam3dApiClient {
   constructor() {
     this.jobs = new Map();
     this.workspaceId = getUrlParamString('workspaceId', 'workspace-local');
     this.mockDelayMs = xb.getUrlParamFloat('mockDelayMs', 4000);
     this.mockModelUrl = getUrlParamString('mockModelUrl', DEFAULT_MODEL_URL);
+    this.backendUrl = getUrlParamString('backendUrl', '').replace(/\/$/, '');
+    this.useBackend = Boolean(this.backendUrl);
   }
 
   async createGenerationJob({sessionId, prompt, image}) {
+    if (this.useBackend) {
+      const response = await fetch(`${this.backendUrl}/generate`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          sessionId,
+          workspaceId: this.workspaceId,
+          prompt,
+          image: parseDataUrl(image),
+        }),
+      });
+      return await response.json();
+    }
+
     const jobId = `job-${crypto.randomUUID()}`;
     const assetId = `asset-${crypto.randomUUID()}`;
     const latentHandle = `latent-${crypto.randomUUID()}`;
@@ -75,6 +107,11 @@ export class Sam3dApiClient {
   }
 
   async getJob(jobId) {
+    if (this.useBackend) {
+      const response = await fetch(`${this.backendUrl}/jobs/${jobId}`);
+      return await response.json();
+    }
+
     const job = this.jobs.get(jobId);
     if (!job) {
       return {
@@ -97,6 +134,21 @@ export class Sam3dApiClient {
   }
 
   async saveWorkspace(workspace) {
+    if (this.useBackend) {
+      const response = await fetch(
+        `${this.backendUrl}/workspaces/${this.workspaceId}/save`,
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            workspaceId: this.workspaceId,
+            workspace,
+          }),
+        }
+      );
+      return await response.json();
+    }
+
     const payload = {
       workspaceId: this.workspaceId,
       savedAt: Date.now(),
@@ -107,6 +159,16 @@ export class Sam3dApiClient {
   }
 
   async loadWorkspace() {
+    if (this.useBackend) {
+      const response = await fetch(
+        `${this.backendUrl}/workspaces/${this.workspaceId}`
+      );
+      if (response.status === 404) {
+        return null;
+      }
+      return await response.json();
+    }
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       return null;
@@ -120,4 +182,3 @@ export class Sam3dApiClient {
     }
   }
 }
-
