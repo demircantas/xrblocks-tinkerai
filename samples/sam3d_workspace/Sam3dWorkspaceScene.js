@@ -6,30 +6,7 @@ import {Sam3dApiClient} from './Sam3dApiClient.js';
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
-const SAMPLE_VERSION = 'ui-debug-v4';
-
-const PANEL_WIDTH = 1.0;
-const PANEL_HEIGHT = 1.4;
-const PANEL_Y_OFFSET = 0.04;
-
-const TITLE_FONT_DP = 20;
-const BODY_FONT_DP = 16;
-const FOOTER_FONT_DP = 16;
-const BUTTON_FONT_DP = 22;
-const BUTTON_FONT_DP_WIDE = 22;
-const MIC_DIAGNOSTICS_FONT_DP = 22;
-
-const ACTION_BUTTON_HEIGHT = 0.25;
-const SECONDARY_BUTTON_HEIGHT = 0.25;
-
-const ROW_WEIGHT_TITLE = 0.05;
-const ROW_WEIGHT_STATUS = 0.08;
-const ROW_WEIGHT_PROMPT = 0.12;
-const ROW_WEIGHT_ACTION = 0.08;
-const ROW_WEIGHT_MIC = 0.18;
-const ROW_WEIGHT_PREVIEW = 0.3;
-const ROW_WEIGHT_SAVE = 0.08;
-const ROW_WEIGHT_FOOTER = 0.08;
+const SAMPLE_VERSION = 'ui-refactor-v1';
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -76,125 +53,182 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   createWorkspaceUI() {
     this.panel = new xb.SpatialPanel({
-      width: PANEL_WIDTH,
-      height: PANEL_HEIGHT,
-      backgroundColor: '#111827F0',
+      width: 0.92,
+      height: 1.08,
+      backgroundColor: '#1f2937EE',
       useDefaultPosition: false,
     });
     this.panel.isRoot = true;
-    this.panel.position.set(0, xb.user.height + PANEL_Y_OFFSET, -1.0);
+    this.panel.position.set(0, xb.user.height + 0.02, -0.95);
     this.add(this.panel);
 
     const grid = this.panel.addGrid();
 
-    grid.addRow({weight: ROW_WEIGHT_TITLE}).addText({
+    grid.addRow({weight: 0.08}).addText({
       text: 'SAM3D Workspace',
-      fontSizeDp: TITLE_FONT_DP,
+      fontSizeDp: 28,
       fontColor: '#d1fae5',
     });
 
-    this.statusText = grid.addRow({weight: ROW_WEIGHT_STATUS}).addText({
+    this.statusText = grid.addRow({weight: 0.08}).addText({
       text: 'Initializing...',
-      fontSizeDp: BODY_FONT_DP,
+      fontSizeDp: 18,
       fontColor: '#fde68a',
       anchorX: 'left',
+      textAlign: 'left',
+      maxWidth: 0.9,
+      paddingX: 0.03,
     });
 
-    this.promptText = grid.addRow({weight: ROW_WEIGHT_PROMPT}).addText({
+    this.promptText = grid.addRow({weight: 0.1}).addText({
       text: '',
-      fontSizeDp: BODY_FONT_DP,
+      fontSizeDp: 18,
       fontColor: '#bfdbfe',
       anchorX: 'left',
       anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.9,
+      paddingX: 0.03,
+      paddingY: 0.01,
     });
 
-    const actionsRowTop = grid.addRow({weight: ROW_WEIGHT_ACTION});
+    const controlsHeaderRow = grid.addRow({weight: 0.05});
+    controlsHeaderRow.addText({
+      text: 'Controls',
+      fontSizeDp: 16,
+      fontColor: '#9ca3af',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    const actionsRowTop = grid.addRow({weight: 0.11});
     const captureButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
       text: 'Capture',
       backgroundColor: '#0f766e',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
+      fontSizeDp: 18,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
     });
     captureButton.onTriggered = () => this.captureScreenshot();
 
     this.recordButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
-      text: 'Record Prompt',
-      backgroundColor: '#7c2d12',
+      text: 'Record',
+      backgroundColor: '#9a3412',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP_WIDE,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
+      fontSizeDp: 18,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
     });
     this.recordButton.onTriggered = () => this.togglePromptRecording();
 
     const generateButton = actionsRowTop.addCol({weight: 1 / 3}).addTextButton({
       text: 'Generate',
-      backgroundColor: '#1d4ed8',
+      backgroundColor: '#2563eb',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
+      fontSizeDp: 18,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
     });
     generateButton.onTriggered = () => this.generateAsset();
 
-    const actionsRowBottom = grid.addRow({weight: ROW_WEIGHT_ACTION});
+    const actionsRowBottom = grid.addRow({weight: 0.11});
     const resetButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
       text: 'Reset',
-      backgroundColor: '#4b5563',
+      backgroundColor: '#6b7280',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
+      fontSizeDp: 18,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
     });
     resetButton.onTriggered = () => this.resetWorkspace();
 
-    this.testMicButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
-      text: 'Test Mic',
-      backgroundColor: '#92400e',
-      fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP_WIDE,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
-    });
+    this.testMicButton = actionsRowBottom
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Test Mic',
+        backgroundColor: '#b45309',
+        fontColor: '#ffffff',
+        fontSizeDp: 18,
+        opacity: 0.98,
+        width: 0.82,
+        height: 0.62,
+      });
     this.testMicButton.onTriggered = () => this.runMicCapabilityTest();
 
     const loadButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
       text: 'Load',
-      backgroundColor: '#4338ca',
+      backgroundColor: '#7c3aed',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP,
-      opacity: 0.95,
-      height: ACTION_BUTTON_HEIGHT,
+      fontSizeDp: 18,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
     });
     loadButton.onTriggered = () => this.loadWorkspace();
 
-    const micRow = grid.addRow({weight: ROW_WEIGHT_MIC});
-    const micStatusCol = micRow.addCol({weight: 1.0});
-    this.micDiagnosticsText = micStatusCol.addText({
+    const diagnosticsHeaderRow = grid.addRow({weight: 0.05});
+    diagnosticsHeaderRow.addText({
+      text: 'Diagnostics',
+      fontSizeDp: 16,
+      fontColor: '#9ca3af',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    const micRow = grid.addRow({weight: 0.1});
+    this.micDiagnosticsText = micRow.addText({
       text: 'Mic diagnostics: checking...',
-      fontSizeDp: MIC_DIAGNOSTICS_FONT_DP,
+      fontSizeDp: 15,
       fontColor: '#fbcfe8',
       anchorX: 'left',
       anchorY: 'top',
-    });
-
-    const previewRow = grid.addRow({weight: ROW_WEIGHT_PREVIEW});
-    this.previewImage = previewRow.addImage({
-      src: '',
+      textAlign: 'left',
+      maxWidth: 0.92,
       paddingX: 0.03,
-      paddingY: 0.03,
     });
 
-    const saveLoadRow = grid.addRow({weight: ROW_WEIGHT_SAVE});
+    const previewHeaderRow = grid.addRow({weight: 0.05});
+    previewHeaderRow.addText({
+      text: 'Latest Capture',
+      fontSizeDp: 16,
+      fontColor: '#9ca3af',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    const previewFrameRow = grid.addRow({weight: 0.28});
+    const previewFrame = previewFrameRow.addPanel({
+      backgroundColor: '#0f172acc',
+      height: 0.92,
+      width: 0.94,
+      showEdge: true,
+    });
+    const previewGrid = previewFrame.addGrid();
+    previewGrid.addRow({weight: 1.0});
+    this.previewImage = previewGrid.addImage({
+      src: '',
+      paddingX: 0.04,
+      paddingY: 0.04,
+    });
+    previewFrame.updateLayouts();
+
+    const saveLoadRow = grid.addRow({weight: 0.11});
     const saveButton = saveLoadRow.addCol({weight: 0.5}).addTextButton({
       text: 'Save Workspace',
       backgroundColor: '#065f46',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP_WIDE,
-      opacity: 0.95,
-      height: SECONDARY_BUTTON_HEIGHT,
+      fontSizeDp: 17,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
     });
     saveButton.onTriggered = () => this.saveWorkspace();
 
@@ -202,9 +236,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
       text: 'Clear Preview',
       backgroundColor: '#374151',
       fontColor: '#ffffff',
-      fontSizeDp: BUTTON_FONT_DP_WIDE,
-      opacity: 0.95,
-      height: SECONDARY_BUTTON_HEIGHT,
+      fontSizeDp: 17,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
     });
     clearButton.onTriggered = () => {
       this.lastScreenshotDataUrl = '';
@@ -212,13 +247,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus('Screenshot preview cleared.');
     };
 
-    grid.addRow({weight: ROW_WEIGHT_FOOTER}).addText({
+    grid.addRow({weight: 0.09}).addText({
       text:
         'Version: ' + SAMPLE_VERSION + '\n' +
-        'Phase 1 scaffold: screenshot, prompt, mic diagnostics, job polling, editable asset, save/load.',
-      fontSizeDp: FOOTER_FONT_DP,
-      fontColor: '#9ca3af',
+        'Phase 1 scaffold for screenshot, prompt, mic diagnostics, job polling, and asset preview.',
+      fontSizeDp: 12,
+      fontColor: '#94a3b8',
       anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
     });
 
     this.panel.updateLayouts();
@@ -280,9 +319,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   updateRecordButton() {
     if (!this.recordButton) return;
-    this.recordButton.text = this.isRecordingPrompt
-      ? 'Stop Recording'
-      : 'Record Prompt';
+    this.recordButton.text = this.isRecordingPrompt ? 'Stop' : 'Record';
   }
 
   setStatus(text) {
@@ -552,6 +589,3 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Workspace reset.');
   }
 }
-
-
-
