@@ -1,160 +1,269 @@
 # SAM3D XR Strategy
 
-## Goal
+## Purpose
+
+This document is the current handoff note for the SAM3D XR prototype in this repository.
+
+It serves two roles:
+
+1. capture the product and architecture strategy,
+2. record what has already been implemented and validated on device.
+
+The immediate next step after this note is to modify the real Google VM backend so it can receive requests from the frontend sample already built in this repo.
+
+## Current Prototype Status
+
+The phase-1 vertical slice is implemented and working.
+
+Implemented frontend sample:
+
+- [`samples/sam3d_workspace/`](../samples/sam3d_workspace)
+
+Implemented mock backend:
+
+- [`samples/sam3d_workspace/server/main.py`](../samples/sam3d_workspace/server/main.py)
+
+Validated behaviors:
+
+- the sample runs on desktop browser and Quest browser,
+- Quest access over USB plus `adb reverse` works,
+- XR session startup is stable on Quest after removing heavy startup dependencies,
+- screenshot capture works,
+- prompt capture works through manual fallback UI,
+- browser speech recognition support is unreliable on Quest,
+- job-based generation flow works end to end,
+- the backend returns a model URL and the frontend loads it successfully,
+- generated models can be moved, rotated, and scaled using `ModelViewer`,
+- save/load/reset work,
+- backend-backed save/load works through the Python mock backend,
+- the mock backend stores request JSON, request images, and workspace JSON on disk for debugging,
+- the mock backend can return different test assets based on prompt keywords or an explicit hint.
+
+This means the basic frontend/backend XR loop is already proven.
+
+## Product Goal
 
 Build a browser-based XR workflow in which a user:
 
-1. Captures a screenshot of the passthrough environment.
-2. Provides a text prompt, ideally through speech plus a simple gesture-driven UI.
-3. Sends the screenshot and prompt to a SAM3D backend.
-4. Receives a generated textured `glb` mesh.
-5. Places, moves, rotates, scales, and saves that mesh in the XR scene.
-6. Selects regions of the mesh for later backend operations.
-7. Saves and reloads meshes, transforms, and selections.
-8. In a later phase, combines parts from multiple generated meshes into a new object.
+1. captures a screenshot of the real scene,
+2. provides a text prompt, ideally by speech or lightweight manual XR input,
+3. sends screenshot plus prompt to a SAM3D backend,
+4. receives a generated textured `glb` mesh,
+5. places, moves, rotates, scales, saves, and reloads that mesh in XR,
+6. later selects regions of the mesh for backend operations,
+7. later combines parts from multiple generated meshes into a new object.
 
-This document is a planning note for implementation in this repository before we commit to code structure.
+## What Exists In This Repo
 
-## Existing Building Blocks In This Repo
+The current codebase already provides the main primitives needed for the prototype:
 
-The current codebase already gives us several strong primitives:
+- screenshot capture through `ScreenshotSynthesizer`,
+- speech input through `SpeechRecognizer`,
+- XR UI panels and buttons,
+- an XR virtual keyboard addon,
+- interactive object manipulation through `ModelViewer`,
+- placement and world interaction helpers,
+- a working sample scaffold that ties these together.
 
-- Screenshot capture through `ScreenshotSynthesizer`, including virtual-plus-camera capture paths.
-- Speech input through `SpeechRecognizer`.
-- A reusable interactive 3D object container through `ModelViewer`, which already supports move/rotate/scale style interactions.
-- Depth and world interaction utilities that can help with placement and ray-based interaction.
+Important sample files:
 
-That means the main work is not raw XR plumbing. The real work is:
+- [`samples/sam3d_workspace/Sam3dWorkspaceScene.js`](../samples/sam3d_workspace/Sam3dWorkspaceScene.js)
+- [`samples/sam3d_workspace/Sam3dApiClient.js`](../samples/sam3d_workspace/Sam3dApiClient.js)
+- [`samples/sam3d_workspace/main.js`](../samples/sam3d_workspace/main.js)
+- [`samples/sam3d_workspace/README.md`](../samples/sam3d_workspace/README.md)
+- [`samples/sam3d_workspace/server/main.py`](../samples/sam3d_workspace/server/main.py)
+- [`samples/sam3d_workspace/server/README.md`](../samples/sam3d_workspace/server/README.md)
 
-- product flow,
-- backend contract design,
-- object/selection data model,
-- persistence,
-- and making the interaction model feel reliable in-headset.
+## Current User Flow
 
-## Recommended Product Shape
+The currently implemented flow is:
 
-We should treat this as a stateful XR editor with a generation pipeline, not as a one-shot demo.
+1. User opens the `sam3d_workspace` sample.
+2. User enters XR.
+3. User captures a screenshot.
+4. User either:
+   - records a prompt through speech, or
+   - edits a prompt manually through the XR keyboard fallback.
+5. User presses `Generate`.
+6. Frontend sends screenshot and prompt to the backend with a job-based request.
+7. Frontend polls job status once per second.
+8. Backend returns a completed asset payload with a renderable model URL.
+9. Frontend loads the asset into a `ModelViewer`.
+10. User can move, rotate, and scale the asset in XR.
+11. User can save the current workspace.
+12. User can reset and reload the workspace.
 
-Recommended user flow:
+## Tested Device Findings
 
-1. User enters XR and sees a lightweight floating tool panel.
-2. User points at a real-world object or scene region.
-3. User taps `Capture`.
-4. The app captures a screenshot and stores it as the current generation input.
-5. User speaks or types a prompt such as `"Generate this coffee mug"`.
-6. The app sends the screenshot, prompt, and optional context metadata to the backend.
-7. While waiting, the app shows a progress state in-world.
-8. When the backend returns a `glb`, the app creates a new editable asset in the scene.
-9. The asset can be translated, rotated, and scaled using the same interaction pattern as the existing model viewer.
-10. The user can switch into `Select Parts` mode and paint or volume-select mesh regions.
-11. The selection is converted into vertex indices plus the asset world transform.
-12. The user can save the current workspace, reload previous results, or send selected parts to the backend for recomposition.
+These observations are important and should be treated as current product constraints.
 
-## Recommended Frontend Architecture
+### Quest Browser / XR Entry
 
-We should implement this as a focused sample or demo first, not directly as broad SDK changes.
+Originally, XR entry failed in the sample when camera, microphone, and related setup were exercised too early.
 
-Suggested top-level modules:
+Current working approach:
 
-- `Sam3dApp`
-  Owns scene-level state and mode transitions.
-- `GenerationController`
-  Handles screenshot capture, prompt capture, and backend requests.
-- `AssetWorkspace`
-  Owns the set of loaded/generated assets in the XR session.
-- `EditableAsset`
-  Wraps a `glb` scene, selection data, and current transform.
-- `SelectionController`
-  Owns selection mesh creation, mesh hit tests, and vertex index extraction.
-- `PersistenceController`
-  Saves and reloads workspace state, likely through the backend.
-- `Sam3dApiClient`
-  Encapsulates HTTP/WebSocket communication with the backend.
-- `XRToolbar`
-  Floating UI for capture, record prompt, generate, transform mode, selection mode, save, load, and combine.
+- keep XR session startup lightweight,
+- do not require microphone or camera setup before entering XR,
+- only request these capabilities on explicit user action.
 
-This gives us a clear boundary between XR interaction logic and server communication logic.
+This change made XR session start behave reliably like the simpler `modelviewer` sample.
 
-## Recommended Backend Contract
+### Screenshot Capture
 
-The browser should stay thin. The backend should own generation state and latent memory.
+Current state:
 
-We should explicitly separate:
+- screenshot capture works,
+- preview UI works,
+- screenshot can be sent to the backend and stored.
 
-- artifact delivery, which is how the frontend gets a renderable `glb`,
-- and state identity, which is how the frontend refers back to backend memory later.
+Important limitation:
 
-Recommended backend identifiers:
+- on Quest 2 and Quest 3, screenshots did not include passthrough imagery even when `?overlayOnCamera=true` was used.
 
-- `jobId`
-  Tracks a long-running generation or recomposition request.
-- `sessionId`
-  Identifies the current live client session. This can be temporary and is useful for in-memory server context.
-- `workspaceId`
-  Identifies a saved workspace snapshot that can be reloaded later.
-- `assetId`
-  Identifies one generated object in the user's workspace.
-- `latentHandle`
-  Identifies backend-owned latent or structured generation memory associated with an asset.
+Practical conclusion:
 
-Recommended backend artifact fields:
+- browser-based Quest XR currently gives us a usable screenshot mechanism for the sample,
+- but it should not be assumed to provide true passthrough pixel capture,
+- if real passthrough pixels are mandatory, a native Quest app path may eventually be required.
 
-- `glbUrl`
-  A URL that the frontend can load immediately into the headset.
-- `thumbnailUrl`
-  Optional preview artifact for UI panels and saved-workspace browsing.
+For now, the frontend should keep treating the captured image as the input image it has available, without assuming it is a full passthrough capture.
 
-Recommended rule:
+### Speech Recognition
 
-- return both `glbUrl` and `assetId` for rendering and frontend state,
-- and return `latentHandle` for future backend edits and recomposition.
+Current state:
 
-This is better than choosing only one mechanism. The `glbUrl` solves rendering. The `latentHandle` solves later editing.
+- microphone permissions can be requested and tested,
+- mic capability diagnostics were added to the sample,
+- Quest browser speech recognition did not reliably produce transcripts,
+- browser speech support should be treated as optional convenience, not core infrastructure.
+
+Practical conclusion:
+
+- speech input should remain a best-effort feature,
+- manual prompt entry must remain available,
+- backend-side speech or audio upload may be a later option if needed.
+
+### Prompt Entry Fallback
+
+A manual fallback now exists in the sample:
+
+- `Edit Prompt` opens the XR keyboard,
+- `Use Default` restores a baseline prompt,
+- an additional `Backspace` panel button was added because the keyboard addon's built-in backspace key did not work reliably in this flow.
+
+This fallback should be treated as required, not optional.
+
+## Current Frontend Architecture
+
+The sample is intentionally narrow and centered on one scene script plus one API client.
+
+### `Sam3dWorkspaceScene`
+
+Responsibilities:
+
+- build the floating XR panel,
+- show status and prompt text,
+- handle screenshot capture,
+- handle speech prompt capture,
+- handle manual prompt editing through XR keyboard,
+- submit generation requests,
+- poll jobs,
+- load returned assets into `ModelViewer`,
+- save/load/reset workspace state.
+
+### `Sam3dApiClient`
+
+Responsibilities:
+
+- encapsulate local mock mode and HTTP backend mode,
+- `POST /generate`,
+- `GET /jobs/<jobId>`,
+- `POST /workspaces/<workspaceId>/save`,
+- `GET /workspaces/<workspaceId>`,
+- allow `artifactHint` query param forwarding for mock testing.
+
+### Asset Handling
+
+The loaded asset is currently wrapped by `ModelViewer` and tracked as one active asset record with:
+
+- `assetId`,
+- `latentHandle`,
+- `glbUrl`,
+- `prompt`,
+- `thumbnailUrl`,
+- serialized transform matrix.
+
+This is a good basis for later multi-asset workspace support.
+
+## Current Backend Contract
+
+The real VM backend should be made compatible with the frontend contract already used by the sample.
 
 ### Generate Request
 
-Suggested request payload:
+Current frontend request shape:
 
 ```json
 {
-  "sessionId": "xr-session-123",
-  "requestId": "generate-001",
+  "sessionId": "session-...",
+  "workspaceId": "workspace-local",
   "prompt": "Generate this coffee mug",
   "image": {
-    "mimeType": "image/jpeg",
-    "base64": "..."
+    "mimeType": "image/png",
+    "dataUrl": "data:image/png;base64,..."
   },
-  "cameraContext": {
-    "width": 640,
-    "height": 480
-  }
+  "artifactHint": "pawn"
 }
 ```
 
-Suggested initial response payload:
+Notes:
+
+- `artifactHint` is currently only for the mock backend and can be ignored by the real server.
+- The real backend does not have to use `dataUrl` forever, but the current frontend sends this shape today.
+- If the VM backend prefers raw base64 without the `data:` prefix, either the backend should parse it, or we should later revise the frontend and update this document.
+
+### Generate Initial Response
+
+Expected response:
 
 ```json
 {
   "jobId": "job-001",
   "status": "queued",
-  "sessionId": "xr-session-123"
+  "sessionId": "session-...",
+  "workspaceId": "workspace-local"
 }
 ```
 
-Suggested final job result payload:
+### Job Poll Response While Running
+
+Expected running response:
+
+```json
+{
+  "jobId": "job-001",
+  "status": "running",
+  "progress": 0.45,
+  "message": "Encoding image and prompt"
+}
+```
+
+### Job Poll Response On Completion
+
+Expected completion response:
 
 ```json
 {
   "jobId": "job-001",
   "status": "completed",
-  "sessionId": "xr-session-123",
-  "workspaceId": "workspace-001",
+  "sessionId": "session-...",
+  "workspaceId": "workspace-local",
   "asset": {
     "assetId": "asset-001",
-    "glbUrl": "/artifacts/asset-001.glb",
-    "thumbnailUrl": "/artifacts/asset-001.jpg",
-    "latentHandle": "latent-asset-001",
+    "glbUrl": "https://.../model.glb",
+    "thumbnailUrl": "data:image/png;base64,...",
+    "latentHandle": "latent-001",
     "metadata": {
       "prompt": "Generate this coffee mug"
     }
@@ -162,255 +271,241 @@ Suggested final job result payload:
 }
 ```
 
-Because generation can take up to a couple of minutes, we should prefer:
+This is the most important contract for the VM server to match.
 
-- `POST /generate` to create a job,
-- `GET /jobs/:jobId` to poll for completion,
-- and optionally a WebSocket progress stream later
+Required fields for frontend compatibility:
 
-instead of a single long blocking request.
+- `jobId`
+- `status`
+- `asset.assetId`
+- `asset.glbUrl`
+- `asset.latentHandle`
 
-Recommended job states:
+Useful optional fields already supported by the frontend:
 
-- `queued`
-- `running`
-- `completed`
-- `failed`
-
-Optional progress payload while running:
-
-```json
-{
-  "jobId": "job-001",
-  "status": "running",
-  "progress": 0.65,
-  "message": "Decoding mesh"
-}
-```
+- `asset.thumbnailUrl`
+- `asset.metadata.prompt`
+- any extra metadata fields
 
 ### Save Workspace Request
 
+Current frontend save payload:
+
 ```json
 {
-  "sessionId": "xr-session-123",
-  "workspaceId": "workspace-001",
+  "workspaceId": "workspace-local",
   "workspace": {
+    "sessionId": "session-...",
+    "prompt": "Generate this coffee mug",
+    "lastScreenshotDataUrl": "data:image/png;base64,...",
     "assets": [
       {
         "assetId": "asset-001",
-        "latentHandle": "latent-asset-001",
-        "glbUrl": "/artifacts/asset-001.glb",
-        "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.1, 1.2, -0.8, 1],
-        "selections": [
-          {
-            "selectionId": "sel-001",
-            "vertexIndices": [1, 2, 3, 10, 11]
-          }
-        ]
+        "latentHandle": "latent-001",
+        "glbUrl": "https://.../model.glb",
+        "prompt": "Generate this coffee mug",
+        "thumbnailUrl": "data:image/png;base64,...",
+        "transform": [1, 0, 0, 0, ...],
+        "selections": []
       }
     ]
   }
 }
 ```
 
-Recommended interpretation:
-
-- `sessionId` identifies the live frontend/backend conversation,
-- `workspaceId` identifies the saved scene state,
-- `assetId` identifies the object in the workspace,
-- `latentHandle` allows the backend to reconnect the saved asset to its internal generation memory.
-
-### Combine / Decode Request
+Expected save response:
 
 ```json
 {
-  "sessionId": "xr-session-123",
-  "workspaceId": "workspace-001",
-  "sourceAssets": [
-    {
-      "assetId": "asset-001",
-      "latentHandle": "latent-asset-001",
-      "transform": [ ... ],
-      "selectedVertexIndices": [ ... ]
-    },
-    {
-      "assetId": "asset-002",
-      "latentHandle": "latent-asset-002",
-      "transform": [ ... ],
-      "selectedVertexIndices": [ ... ]
-    }
-  ]
+  "workspaceId": "workspace-local",
+  "savedAt": 1710000000000,
+  "workspace": {
+    "...": "..."
+  }
 }
 ```
 
-Response:
+### Load Workspace Response
 
-- new `assetId`
-- new generated `glbUrl`
-- new `latentHandle`
-- optional updated workspace snapshot
+Expected load response:
 
-## Scene Data Model
-
-The frontend should treat every generated mesh as an asset record with stable IDs.
-
-Suggested asset shape:
-
-```ts
-type AssetRecord = {
-  assetId: string;
-  object3D: THREE.Object3D;
-  sourcePrompt?: string;
-  glbUrl?: string;
-  transformMatrixWorld: number[]; // 16 numbers
-  selections: SelectionRecord[];
-};
-
-type SelectionRecord = {
-  selectionId: string;
-  label?: string;
-  vertexIndices: number[];
-  createdAt: number;
-};
+```json
+{
+  "workspaceId": "workspace-local",
+  "savedAt": 1710000000000,
+  "workspace": {
+    "sessionId": "session-...",
+    "prompt": "Generate this coffee mug",
+    "lastScreenshotDataUrl": "data:image/png;base64,...",
+    "assets": [
+      {
+        "assetId": "asset-001",
+        "latentHandle": "latent-001",
+        "glbUrl": "https://.../model.glb",
+        "prompt": "Generate this coffee mug",
+        "thumbnailUrl": "data:image/png;base64,...",
+        "transform": [1, 0, 0, 0, ...],
+        "selections": []
+      }
+    ]
+  }
+}
 ```
 
-Important recommendation:
+If the VM backend returns this shape, the current frontend can restore the workspace without structural changes.
 
-- keep vertex selections in the asset's local mesh indexing space,
-- send transforms separately,
-- and avoid baking transforms into vertex coordinates on the frontend.
+## Current Mock Backend Behavior
 
-That keeps the backend contract much cleaner.
+The Python mock backend does the following today:
 
-## Screenshot Strategy
+- exposes:
+  - `POST /generate`
+  - `GET /jobs/<jobId>`
+  - `POST /workspaces/<workspaceId>/save`
+  - `GET /workspaces/<workspaceId>`
+  - `GET /healthz`
+- simulates a delayed long-running generation job,
+- returns synthetic `assetId` and `latentHandle`,
+- returns a renderable remote model URL,
+- writes request metadata JSON to disk,
+- writes request images to disk,
+- writes workspace JSON to disk,
+- supports multiple mock artifact choices.
 
-We should start simple and reliable.
+Current mock artifact support:
 
-Phase 1 screenshot behavior:
+- `cat`
+- `pawn`
 
-- Use the repo's screenshot synthesizer.
-- Capture a single still image on explicit user action.
-- Keep the capture resolution modest at first.
-- Store the last captured image locally in memory so the user can confirm before sending.
+Current selection behavior in the mock backend:
 
-Important open point:
+- none yet,
+- selections are only saved as part of workspace JSON.
 
-- We need to verify whether the exact passthrough-inclusive capture path on Quest gives the backend the image semantics we expect.
+## Current Persistence Model
 
-Even if screenshot capture works technically, we should test:
+The frontend currently treats the backend as the preferred persistence layer when `backendUrl` is provided.
 
-- whether the real-world object is visible in the capture,
-- whether image orientation is correct,
-- whether the captured framing matches what the user thought they selected.
+Current identity model:
 
-We should add a pre-send preview panel in XR early. That will save a lot of debugging time.
+- `sessionId`
+  current frontend session id
+- `workspaceId`
+  stable workspace key, defaults to `workspace-local`
+- `assetId`
+  stable frontend/backend object id
+- `latentHandle`
+  backend-facing id for future editing / latent linkage
 
-## Prompt Input Strategy
+This identity model should be preserved on the real VM backend.
 
-We should separate prompt capture from gesture input.
+## Current Operational Commands
 
-Recommended approach:
+### Frontend
 
-- Speech for prompt text.
-- XR UI buttons for command mode and confirmation.
-- Gestures/controllers for placement and selection.
+From repo root:
 
-Example interaction:
+```bash
+npm run dev
+```
 
-1. User taps `Record Prompt`.
-2. Speech recognizer starts.
-3. Transcript appears live in a floating panel.
-4. User taps `Use Prompt`.
-5. User taps `Generate`.
+The repo's static server is configured with `Cache-Control: no-store`, which is important for Quest and desktop browser refresh reliability.
 
-Important risk:
+### Mock Backend
 
-- browser speech recognition support may vary across headset browsers.
+From repo root:
 
-Because of that, we should build prompt entry with a fallback:
+```bash
+python samples/sam3d_workspace/server/main.py
+```
 
-- speech first,
-- manual text input second,
-- optional predefined prompt shortcuts third.
+Optional:
 
-## Mesh Placement and Manipulation
+```bash
+python samples/sam3d_workspace/server/main.py --job-delay 4
+python samples/sam3d_workspace/server/main.py --default-artifact pawn
+```
 
-For generated `glb` objects, we should reuse the interaction ideas from `ModelViewer` rather than inventing a new manipulator system immediately.
+### Frontend URL
 
-Recommendation:
+```text
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790
+```
 
-- wrap each generated asset in an `EditableAsset` container,
-- use a `ModelViewer`-like interaction pattern for move/rotate/scale,
-- store the transform as a `THREE.Matrix4` and serialize it to a flat 16-number array when talking to the backend.
+### Force Mock Artifact For Testing
 
-We should standardize on:
+```text
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&artifactHint=cat
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&artifactHint=pawn
+```
 
-- local asset coordinates for geometry,
-- world transform matrix for placement,
-- and one authoritative transform per asset.
+### Quest Over USB
 
-## Selection Strategy
+```bash
+adb reverse tcp:8080 tcp:8080
+adb reverse tcp:8790 tcp:8790
+```
 
-This is the area that needs the most design discipline.
+Then open the same frontend URL in Quest Browser.
 
-The requirement is not just visual highlighting. We also need a stable mapping back to mesh vertices for backend processing.
+## Current Risks And Constraints
 
-### Recommended Selection Model
+### Passthrough Image Availability
 
-We should represent selection in two layers:
+Do not assume Quest Browser will provide true passthrough pixels in the captured screenshot.
 
-1. `SelectionVolume`
-   A visible user-controlled mesh or brush volume used for interaction.
-2. `SelectionResult`
-   The computed set of selected vertex indices for a specific asset.
+### Speech Reliability
 
-This is better than storing only the visible selection mesh, because backend operations ultimately need vertex IDs, not just a sculpting overlay.
+Do not assume Quest Browser speech transcription will work reliably.
 
-### Initial Selection Implementation
+### Browser-Based XR Limits
 
-For phase 1, we should avoid true continuous sculpting and start with a simpler volume-based selector:
+The current prototype is browser-based by design. That keeps iteration fast, but also means browser capability gaps are real product constraints until proven otherwise.
 
-- sphere selector,
-- capsule selector,
-- or oriented box selector.
+## Next Step For The Real VM Server
 
-Why:
+Tomorrow's server-side task should be:
 
-- it is easier to debug,
-- easier to serialize,
-- and sufficient for validating the backend loop.
+1. implement the same HTTP shape as the current mock backend,
+2. accept the frontend's current request payload,
+3. create real long-running jobs,
+4. expose `GET /jobs/<jobId>` polling,
+5. return a real renderable `glbUrl`,
+6. return stable `assetId` and `latentHandle`,
+7. support workspace save/load using the current frontend payload shape.
 
-The user can move/scale the selection volume over the model and press `Apply Selection`. We then compute selected vertices by testing whether each vertex in asset-local coordinates falls inside the selection volume after accounting for transforms.
+The easiest way to succeed quickly is to make the VM backend match the already-working mock contract first, then iterate later.
 
-### Highlight Rendering
+In other words:
 
-We should visualize selection in two ways:
+- do not redesign the frontend/backend contract tomorrow unless absolutely necessary,
+- first make the real VM server look like the current Python mock backend from the frontend's perspective.
 
-- the selection volume itself,
-- and a highlight overlay on selected triangles or vertices.
+## After The Real Backend Is Connected
 
-For the first implementation, the easiest robust path is likely:
+Once the real server works with the current frontend, the next major milestone should be selection.
 
-- clone the selected triangles into a secondary highlight mesh,
-- render it slightly inflated or with additive/emissive material,
-- regenerate it whenever selection changes.
+Recommended next feature order:
 
-This is more stable than trying to mutate the original material pipeline too early.
+1. connect real VM backend to existing sample,
+2. verify real `glb` return path and workspace persistence,
+3. prototype selection volume plus selection result data,
+4. send selected indices plus transform to backend,
+5. later support multi-asset recomposition.
 
-### Vertex Index Extraction
+## Selection Strategy For The Next Phase
 
-For each selectable mesh:
+Selection has not been implemented yet.
 
-1. Read position and index buffers.
-2. Convert candidate vertices into a consistent coordinate space.
-3. Test membership against the current selection volume.
-4. Store the matching vertex indices.
+Recommended selection design remains:
 
-Important decision:
+- represent a visible `SelectionVolume`,
+- compute a `SelectionResult` containing selected vertex indices,
+- keep indices in asset-local coordinates,
+- send transform separately as a 4x4 matrix,
+- if a model contains multiple submeshes, store selections by submesh/node.
 
-- if a `glb` contains multiple submeshes, we should store selection by submesh, not as one global index list.
-
-Suggested shape:
+Suggested future shape:
 
 ```ts
 type MeshSelection = {
@@ -419,195 +514,27 @@ type MeshSelection = {
 };
 ```
 
-That will make backend mapping more reliable.
+This is still the recommended phase-2 direction.
 
-## Save / Load Strategy
+## Summary
 
-For this project, server-backed persistence is the right default.
+What is already done:
 
-Reasons:
+- working Quest-compatible XR frontend sample,
+- working screenshot flow,
+- working manual prompt fallback,
+- working job-based backend polling flow,
+- working asset loading and manipulation,
+- working backend-backed save/load,
+- working Python mock backend,
+- working mock multi-artifact switching.
 
-- the app is browser-based,
-- the backend already owns latent state,
-- later recomposition depends on server memory anyway,
-- and `localStorage` or IndexedDB alone would not capture the full backend-side generation state.
+What is not done yet:
 
-Recommended persistence model:
+- true passthrough-inclusive capture,
+- reliable headset speech transcription,
+- mesh selection pipeline,
+- real SAM3D backend integration,
+- multi-asset part recomposition.
 
-- frontend saves lightweight workspace metadata,
-- backend stores both workspace metadata and latent references,
-- frontend reloads by requesting a workspace snapshot from the backend.
-
-Recommended identity model:
-
-- `sessionId`
-  The current live editing session in the browser. This may expire and does not need to be the primary saved-state key.
-- `workspaceId`
-  The stable ID used for save/load operations.
-- `assetId`
-  The stable ID for each placed object in the workspace.
-- `latentHandle`
-  A backend-facing reference that connects saved assets to structured latent memory or other internal generation state.
-
-Practical rule:
-
-- save and load by `workspaceId`,
-- keep `sessionId` for live requests,
-- and persist `assetId` plus `latentHandle` inside the workspace snapshot.
-
-Workspace snapshot should include:
-
-- asset IDs,
-- artifact URLs,
-- latent handles,
-- transforms,
-- selections,
-- parent/child composition metadata later on.
-
-This gives us a useful separation of responsibilities:
-
-- the frontend can always render from `glbUrl`,
-- the backend can always edit from `latentHandle`,
-- and the overall scene can be restored from `workspaceId`.
-
-## Phase Plan
-
-### Phase 1: Vertical Slice
-
-Goal:
-
-- prove the core loop from capture to generated asset placement.
-
-Scope:
-
-- screenshot capture,
-- prompt input,
-- job-based backend generate call,
-- polling for completion,
-- `glbUrl` return,
-- place generated mesh in XR,
-- move/rotate/scale mesh,
-- save/load one asset record.
-
-Do not include advanced mesh-part composition yet.
-
-### Phase 2: Selection Pipeline
-
-Goal:
-
-- prove frontend-to-backend mesh part selection.
-
-Scope:
-
-- selection volume,
-- selected vertex extraction,
-- visible selection highlight,
-- serialization of selections and world transform,
-- backend round-trip for one selected region.
-
-### Phase 3: Multi-Asset Workspace
-
-Goal:
-
-- support several generated assets in one scene and persist them cleanly.
-
-Scope:
-
-- asset list panel,
-- select active asset,
-- save/load workspace snapshots,
-- multiple independent selections,
-- better transform editing UX.
-
-### Phase 4: Part Combination
-
-Goal:
-
-- create a new object from selected regions across multiple assets.
-
-Scope:
-
-- select parts from several assets,
-- send all transforms plus per-asset selected indices,
-- receive a decoded combined `glb`,
-- place result as a new asset,
-- preserve lineage metadata.
-
-## Recommended First Deliverable
-
-Before any selection work, we should build a narrow but complete end-to-end demo:
-
-1. Capture screenshot from XR.
-2. Enter prompt.
-3. Send both to a stub or real SAM3D endpoint.
-4. Receive a `jobId`.
-5. Poll for completion.
-6. Receive `assetId`, `glbUrl`, and `latentHandle`.
-7. Load the `glb` into an editable asset wrapper.
-8. Move/rotate/scale it in the scene.
-9. Save and reload that one asset via backend persistence.
-
-This will validate:
-
-- networking,
-- long-running job UX,
-- asset loading,
-- interaction model,
-- backend session handling,
-- and the basic UX loop.
-
-If we skip this and jump straight to selections, we risk building selection logic before the asset lifecycle is stable.
-
-## Mock Backend
-
-We should create a small Python mock backend early in development.
-
-This is valuable even if the real SAM3D service is already planned, because it lets us unblock frontend work and test the XR flow before generation is ready or stable.
-
-Recommended responsibilities for the mock backend:
-
-- accept `POST /generate`,
-- return a `jobId`,
-- simulate a delayed long-running job,
-- return a fixed test `glbUrl`,
-- assign synthetic `assetId`, `workspaceId`, and `latentHandle` values,
-- implement basic `save` and `load` endpoints for workspace snapshots.
-
-Suggested phase-1 behavior:
-
-- store workspace state in Python memory,
-- optionally write uploaded images and saved workspace JSON to disk for debugging,
-- serve one or two static `glb` files from a local artifacts folder,
-- simulate progress over 10 to 30 seconds so the frontend can exercise loading states.
-
-This mock backend should not try to emulate SAM3D internals. It only needs to validate the frontend contract and state lifecycle.
-
-## Open Questions
-
-These are the main questions we should answer before implementation:
-
-1. Does the SAM3D backend want raw image pixels, JPEG/PNG, or a URL upload flow?
-2. Will generation expose only polling, or polling plus pushed progress events?
-3. Can one generated asset contain multiple named submeshes that we can address stably?
-4. Does the backend expect vertex indices against the decoded mesh, latent structure, or both?
-5. Do we need triangle-face selection instead of only vertex selection?
-6. Should selection be additive/subtractive across multiple passes?
-7. Do we need exact hand-gesture input, or are controller/reticle interactions acceptable for phase 1?
-8. Does Quest browser speech recognition support meet the product requirement, or do we need a backend speech path?
-9. Does the backend need camera intrinsics/extrinsics in addition to the image and prompt?
-
-## Recommended Next Step
-
-Implement a new sample focused on the phase-1 vertical slice and keep it intentionally narrow:
-
-- toolbar,
-- screenshot preview,
-- prompt entry,
-- job-based backend generate call,
-- polling and progress UI,
-- returned `glbUrl`,
-- editable asset wrapper,
-- save/load,
-- and a Python mock backend for early testing.
-
-Once that loop feels stable in-headset, we add selection as a second milestone instead of mixing both concerns immediately.
+The correct immediate focus is the real VM backend integration, using the current mock backend contract as the compatibility target.
