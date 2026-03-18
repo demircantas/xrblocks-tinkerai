@@ -15,6 +15,7 @@ Optional flags:
 
 ```bash
 python samples/sam3d_workspace/server/main.py --port 8790 --job-delay 15
+python samples/sam3d_workspace/server/main.py --default-artifact pawn
 ```
 
 ## Endpoints
@@ -25,12 +26,39 @@ python samples/sam3d_workspace/server/main.py --port 8790 --job-delay 15
 - `GET /workspaces/<workspaceId>`
 - `GET /healthz`
 
+## Artifact Selection
+
+The mock backend can return different test models.
+
+Available artifact keys:
+
+- `cat`
+- `pawn`
+
+Selection rules:
+
+- `artifactHint` in the request takes priority.
+- Otherwise the backend uses prompt keywords.
+- Otherwise it falls back to `--default-artifact`.
+
+Current prompt keyword examples:
+
+- `cat`, `kitten`, `feline` -> `cat`
+- `pawn`, `chess`, `piece`, `mug`, `coffee`, `cup` -> `pawn`
+
 ## Frontend
 
 Open the sample with:
 
 ```text
 http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790
+```
+
+To force a specific returned model for testing:
+
+```text
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&artifactHint=cat
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&artifactHint=pawn
 ```
 
 For Quest over USB:
@@ -44,5 +72,5 @@ Then open the same frontend URL on the headset.
 ## Notes
 
 - Requests and saved workspaces are mirrored to `server/data/` for debugging.
-- The server returns a static sample model URL by default.
-- `--artifact-url` can be used to point at a different test model.
+- The selected artifact key is stored alongside each generation request JSON.
+- `GET /healthz` now reports the available artifact keys.

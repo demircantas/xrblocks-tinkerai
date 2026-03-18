@@ -30,9 +30,28 @@ from urllib.parse import urlparse
 
 
 DEFAULT_PORT = 8790
-DEFAULT_MODEL_URL = (
-    'https://cdn.jsdelivr.net/gh/xrblocks/assets@main/models/Cat/cat.gltf'
-)
+DEFAULT_ARTIFACT_KEY = 'cat'
+ARTIFACT_CATALOG = {
+    'cat': {
+        'label': 'Animated Cat',
+        'url': 'https://cdn.jsdelivr.net/gh/xrblocks/assets@main/models/Cat/cat.gltf',
+    },
+    'pawn': {
+        'label': 'ARCore Pawn',
+        'url': 'https://cdn.jsdelivr.net/gh/xrblocks/assets@main/models/arcore_pawn_compressed.glb',
+    },
+}
+PROMPT_ARTIFACT_RULES = [
+    ('cat', 'cat'),
+    ('kitten', 'cat'),
+    ('feline', 'cat'),
+    ('pawn', 'pawn'),
+    ('chess', 'pawn'),
+    ('piece', 'pawn'),
+    ('mug', 'pawn'),
+    ('coffee', 'pawn'),
+    ('cup', 'pawn'),
+]
 
 
 def _safe_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -48,6 +67,25 @@ def _strip_data_url_prefix(data_url: str) -> tuple[str, str]:
     return mime_type, encoded
 
 
+def _normalize_artifact_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    key = value.strip().lower()
+    return key if key in ARTIFACT_CATALOG else None
+
+
+def _select_artifact_key(prompt: str, explicit_key: str | None, fallback_key: str) -> str:
+    explicit = _normalize_artifact_key(explicit_key)
+    if explicit:
+        return explicit
+
+    normalized_prompt = (prompt or '').lower()
+    for needle, artifact_key in PROMPT_ARTIFACT_RULES:
+        if needle in normalized_prompt:
+            return artifact_key
+    return fallback_key
+
+
 @dataclass
 class JobState:
     job_id: str
@@ -55,6 +93,7 @@ class JobState:
     workspace_id: str
     prompt: str
     image_payload: dict[str, Any]
+    artifact_key: str
     status: str = 'queued'
     progress: float = 0.0
     message: str = 'Queued'
@@ -63,9 +102,9 @@ class JobState:
 
 
 class MockBackendStore:
-    def __init__(self, root_dir: Path, artifact_url: str, job_delay_s: float):
+    def __init__(self, root_dir: Path, default_artifact_key: str, job_delay_s: float):
         self.root_dir = root_dir
-        self.artifact_url = artifact_url
+        self.default_artifact_key = _normalize_artifact_key(default_artifact_key) or DEFAULT_ARTIFACT_KEY
         self.job_delay_s = job_delay_s
         self.jobs: dict[str, JobState] = {}
         self.workspaces: dict[str, dict[str, Any]] = {}
@@ -84,6 +123,11 @@ class MockBackendStore:
         workspace_id = payload.get('workspaceId', 'workspace-local')
         prompt = payload.get('prompt', '')
         image_payload = payload.get('image', {})
+        artifact_key = _select_artifact_key(
+            prompt,
+            payload.get('artifactHint'),
+            self.default_artifact_key,
+        )
         job_id = f'job-{uuid.uuid4()}'
 
         job = JobState(
@@ -92,6 +136,7 @@ class MockBackendStore:
             workspace_id=workspace_id,
             prompt=prompt,
             image_payload=image_payload,
+            artifact_key=artifact_key,
         )
         with self._lock:
             self.jobs[job_id] = job
@@ -105,6 +150,7 @@ class MockBackendStore:
             'status': 'queued',
             'sessionId': session_id,
             'workspaceId': workspace_id,
+            'artifactKey': artifact_key,
         }
 
     def _persist_generation_request(self, job: JobState) -> None:
@@ -113,6 +159,8 @@ class MockBackendStore:
             'sessionId': job.session_id,
             'workspaceId': job.workspace_id,
             'prompt': job.prompt,
+            'artifactKey': job.artifact_key,
+            'artifactLabel': ARTIFACT_CATALOG[job.artifact_key]['label'],
             'createdAt': job.created_at,
         }
         _safe_write_json(self.requests_dir / f'{job.job_id}.json', payload)
@@ -159,6 +207,7 @@ class MockBackendStore:
             job = self.jobs.get(job_id)
             if not job:
                 return
+            artifact = ARTIFACT_CATALOG[job.artifact_key]
             job.status = 'completed'
             job.progress = 1.0
             job.message = 'Completed'
@@ -169,10 +218,14 @@ class MockBackendStore:
                 'workspaceId': job.workspace_id,
                 'asset': {
                     'assetId': asset_id,
-                    'glbUrl': self.artifact_url,
+                    'glbUrl': artifact['url'],
                     'thumbnailUrl': job.image_payload.get('dataUrl', ''),
                     'latentHandle': latent_handle,
-                    'metadata': {'prompt': job.prompt},
+                    'metadata': {
+                        'prompt': job.prompt,
+                        'artifactKey': job.artifact_key,
+                        'artifactLabel': artifact['label'],
+                    },
                 },
             }
 
@@ -192,6 +245,7 @@ class MockBackendStore:
                 'status': job.status,
                 'progress': job.progress,
                 'message': job.message,
+                'artifactKey': job.artifact_key,
             }
 
     def save_workspace(self, workspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -229,7 +283,7 @@ class MockBackendHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == '/healthz':
-            self._send_json({'ok': True})
+            self._send_json({'ok': True, 'artifacts': list(ARTIFACT_CATALOG.keys())})
             return
 
         if path.startswith('/jobs/'):
@@ -309,7 +363,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='SAM3D workspace mock backend')
     parser.add_argument('--port', type=int, default=DEFAULT_PORT)
     parser.add_argument('--job-delay', type=float, default=12.0)
-    parser.add_argument('--artifact-url', default=DEFAULT_MODEL_URL)
+    parser.add_argument(
+        '--default-artifact',
+        default=DEFAULT_ARTIFACT_KEY,
+        choices=sorted(ARTIFACT_CATALOG.keys()),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -320,13 +378,14 @@ def main() -> None:
     root_dir = Path(__file__).resolve().parent
     store = MockBackendStore(
         root_dir=root_dir,
-        artifact_url=args.artifact_url,
+        default_artifact_key=args.default_artifact,
         job_delay_s=args.job_delay,
     )
     MockBackendHandler.store = store
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), MockBackendHandler)
     logging.info('Mock backend listening on http://127.0.0.1:%d', args.port)
+    logging.info('Available artifact keys: %s', ', '.join(sorted(ARTIFACT_CATALOG.keys())))
     logging.info(
         'On Quest over USB, run: adb reverse tcp:%d tcp:%d',
         args.port,
@@ -347,4 +406,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-

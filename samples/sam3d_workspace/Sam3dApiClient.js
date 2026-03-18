@@ -36,6 +36,7 @@ export class Sam3dApiClient {
     this.mockDelayMs = xb.getUrlParamFloat('mockDelayMs', 4000);
     this.mockModelUrl = getUrlParamString('mockModelUrl', DEFAULT_MODEL_URL);
     this.backendUrl = getUrlParamString('backendUrl', '').replace(/\/$/, '');
+    this.artifactHint = getUrlParamString('artifactHint', '');
     this.useBackend = Boolean(this.backendUrl);
   }
 
@@ -53,6 +54,7 @@ export class Sam3dApiClient {
           workspaceId: this.workspaceId,
           prompt,
           image: parseDataUrl(image),
+          artifactHint: this.artifactHint || undefined,
         }),
       });
       return await response.json();
@@ -186,4 +188,6 @@ export class Sam3dApiClient {
     }
   }
 }
+
+
 

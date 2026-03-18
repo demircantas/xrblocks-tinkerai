@@ -90,6 +90,8 @@ The local static server now uses `Cache-Control: no-store`, which helps headset 
   Overrides the workspace ID.
 - `backendUrl`
   Switches the sample from the local mock client to the Python mock backend.
+- `artifactHint`
+  Forces the Python mock backend to return a specific test model such as `cat` or `pawn`.
 - `overlayOnCamera`
   Requests camera-overlay screenshot behavior when available.
 
@@ -102,7 +104,7 @@ http://localhost:8080/samples/sam3d_workspace/?prompt=Generate%20this%20lamp&moc
 Example backend URL:
 
 ```text
-http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&workspaceId=demo-workspace
+http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&workspaceId=demo-workspace&artifactHint=pawn
 ```
 
 ## Notes
@@ -110,3 +112,5 @@ http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&
 - The Python backend stores generation request metadata and saved workspaces under `samples/sam3d_workspace/server/data/`.
 - The mock backend returns a stable asset contract with `assetId`, `glbUrl`, `thumbnailUrl`, `latentHandle`, and `metadata.prompt`.
 - This keeps the frontend aligned with the intended SAM3D server contract before the real backend exists.
+
+
