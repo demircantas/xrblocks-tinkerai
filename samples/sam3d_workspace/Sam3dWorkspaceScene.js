@@ -98,27 +98,40 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const promptActionsRow = grid.addRow({weight: 0.08});
     const editPromptButton = promptActionsRow
-      .addCol({weight: 0.5})
+      .addCol({weight: 1 / 3})
       .addTextButton({
         text: 'Edit Prompt',
         backgroundColor: '#1d4ed8',
         fontColor: '#ffffff',
         fontSizeDp: 16,
         opacity: 0.98,
-        width: 0.88,
+        width: 0.86,
         height: 0.56,
       });
     editPromptButton.onTriggered = () => this.togglePromptEditor();
 
+    const backspacePromptButton = promptActionsRow
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Backspace',
+        backgroundColor: '#7c2d12',
+        fontColor: '#ffffff',
+        fontSizeDp: 16,
+        opacity: 0.98,
+        width: 0.86,
+        height: 0.56,
+      });
+    backspacePromptButton.onTriggered = () => this.removeLastPromptCharacter();
+
     const defaultPromptButton = promptActionsRow
-      .addCol({weight: 0.5})
+      .addCol({weight: 1 / 3})
       .addTextButton({
         text: 'Use Default',
         backgroundColor: '#475569',
         fontColor: '#ffffff',
         fontSizeDp: 16,
         opacity: 0.98,
-        width: 0.88,
+        width: 0.86,
         height: 0.56,
       });
     defaultPromptButton.onTriggered = () => this.restoreDefaultPrompt();
@@ -414,6 +427,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Default prompt restored.');
   }
 
+  removeLastPromptCharacter() {
+    if (!this.currentPrompt) {
+      this.setStatus('Prompt is already empty.');
+      return;
+    }
+
+    this.currentPrompt = this.currentPrompt.slice(0, -1);
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+    this.refreshPromptText();
+    this.setStatus('Removed the last prompt character.');
+  }
+
   async captureScreenshot() {
     this.setStatus('Capturing screenshot...');
     try {
@@ -706,3 +733,4 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Workspace reset.');
   }
 }
+
