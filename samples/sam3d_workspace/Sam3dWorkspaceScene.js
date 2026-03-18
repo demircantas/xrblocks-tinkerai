@@ -7,7 +7,12 @@ import {Sam3dApiClient} from './Sam3dApiClient.js';
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
-const SAMPLE_VERSION = 'ui-refactor-v2';
+const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
+  'useDesktopGeminiCapture',
+  false
+);
+const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
+const SAMPLE_VERSION = 'ui-refactor-v3';
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -17,6 +22,21 @@ function getUrlParamString(name, defaultValue = '') {
 function matrixToArray(object3D) {
   object3D.updateMatrix();
   return object3D.matrix.toArray();
+}
+
+async function loadImageAsDataUrl(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch test capture: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read test capture blob.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 export class Sam3dWorkspaceScene extends xb.Script {
@@ -44,7 +64,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateMicDiagnostics();
     this.refreshPromptText();
     this.setStatus(
-      'Ready. Capture a screenshot, record a prompt, or edit it manually.'
+      USE_DESKTOP_GEMINI_CAPTURE
+        ? 'Ready. Capture will use assets/desktop_gemini.png for testing.'
+        : 'Ready. Capture a screenshot, record a prompt, or edit it manually.'
     );
   }
 
@@ -444,16 +466,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
   async captureScreenshot() {
     this.setStatus('Capturing screenshot...');
     try {
-      const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
-      const image = await xb.core.screenshotSynthesizer.getScreenshot(
-        useCameraOverlay
-      );
+      let image = '';
+      if (USE_DESKTOP_GEMINI_CAPTURE) {
+        image = await loadImageAsDataUrl(DESKTOP_GEMINI_CAPTURE_URL);
+      } else {
+        const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
+        image = await xb.core.screenshotSynthesizer.getScreenshot(
+          useCameraOverlay
+        );
+      }
+
       this.lastScreenshotDataUrl = image;
       this.previewImage.load(image);
       this.setStatus(
-        useCameraOverlay
-          ? 'Camera-overlay screenshot captured.'
-          : 'Scene screenshot captured.'
+        USE_DESKTOP_GEMINI_CAPTURE
+          ? 'Loaded test capture from assets/desktop_gemini.png.'
+          : OVERLAY_ON_CAMERA && !!xb.core.deviceCamera
+            ? 'Camera-overlay screenshot captured.'
+            : 'Scene screenshot captured.'
       );
     } catch (error) {
       console.error('Failed to capture screenshot.', error);
@@ -733,4 +763,3 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Workspace reset.');
   }
 }
-

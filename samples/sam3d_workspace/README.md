@@ -114,3 +114,4 @@ http://localhost:8080/samples/sam3d_workspace/?backendUrl=http://localhost:8790&
 - This keeps the frontend aligned with the intended SAM3D server contract before the real backend exists.
 
 
+
