@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
+import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 
 import {Sam3dApiClient} from './Sam3dApiClient.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
-const SAMPLE_VERSION = 'ui-refactor-v1';
+const SAMPLE_VERSION = 'ui-refactor-v2';
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -30,17 +31,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.activeModelViewer = null;
     this.pollHandle = null;
     this.isRecordingPrompt = false;
+    this.isPromptEditorOpen = false;
+    this.promptKeyboard = null;
   }
 
   init() {
     xb.core.input.addReticles();
     this.addLights();
     this.createWorkspaceUI();
+    this.createPromptKeyboard();
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
     this.refreshPromptText();
     this.setStatus(
-      'Ready. Capture a screenshot, record a prompt, and generate an asset.'
+      'Ready. Capture a screenshot, record a prompt, or edit it manually.'
     );
   }
 
@@ -54,7 +58,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   createWorkspaceUI() {
     this.panel = new xb.SpatialPanel({
       width: 0.92,
-      height: 1.08,
+      height: 1.1,
       backgroundColor: '#1f2937EE',
       useDefaultPosition: false,
     });
@@ -91,6 +95,33 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingX: 0.03,
       paddingY: 0.01,
     });
+
+    const promptActionsRow = grid.addRow({weight: 0.08});
+    const editPromptButton = promptActionsRow
+      .addCol({weight: 0.5})
+      .addTextButton({
+        text: 'Edit Prompt',
+        backgroundColor: '#1d4ed8',
+        fontColor: '#ffffff',
+        fontSizeDp: 16,
+        opacity: 0.98,
+        width: 0.88,
+        height: 0.56,
+      });
+    editPromptButton.onTriggered = () => this.togglePromptEditor();
+
+    const defaultPromptButton = promptActionsRow
+      .addCol({weight: 0.5})
+      .addTextButton({
+        text: 'Use Default',
+        backgroundColor: '#475569',
+        fontColor: '#ffffff',
+        fontSizeDp: 16,
+        opacity: 0.98,
+        width: 0.88,
+        height: 0.56,
+      });
+    defaultPromptButton.onTriggered = () => this.restoreDefaultPrompt();
 
     const controlsHeaderRow = grid.addRow({weight: 0.05});
     controlsHeaderRow.addText({
@@ -204,7 +235,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingX: 0.03,
     });
 
-    const previewFrameRow = grid.addRow({weight: 0.28});
+    const previewFrameRow = grid.addRow({weight: 0.24});
     const previewFrame = previewFrameRow.addPanel({
       backgroundColor: '#0f172acc',
       height: 0.92,
@@ -247,10 +278,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus('Screenshot preview cleared.');
     };
 
-    grid.addRow({weight: 0.09}).addText({
+    grid.addRow({weight: 0.1}).addText({
       text:
         'Version: ' + SAMPLE_VERSION + '\n' +
-        'Phase 1 scaffold for screenshot, prompt, mic diagnostics, job polling, and asset preview.',
+        'Phase 1 scaffold for screenshot, prompt editing, mic diagnostics, job polling, and asset preview.',
       fontSizeDp: 12,
       fontColor: '#94a3b8',
       anchorX: 'left',
@@ -263,16 +294,41 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.panel.updateLayouts();
   }
 
+  createPromptKeyboard() {
+    this.promptKeyboard = new Keyboard();
+    this.add(this.promptKeyboard);
+    this.promptKeyboard.visible = false;
+    this.promptKeyboard.position.set(0, -0.42, 0.1);
+    this.promptKeyboard.setText(this.currentPrompt);
+
+    this.promptKeyboard.onTextChanged = (text) => {
+      this.currentPrompt = text || '';
+      this.refreshPromptText();
+      this.setStatus('Editing prompt manually...');
+    };
+
+    this.promptKeyboard.onEnterPressed = (text) => {
+      this.currentPrompt = text || this.currentPrompt;
+      this.refreshPromptText();
+      this.hidePromptEditor('Prompt updated from keyboard.');
+    };
+  }
+
   bindSpeechRecognizer() {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
-      this.setStatus('Speech recognition unavailable. Use the default prompt.');
+      this.setStatus(
+        'Speech recognition unavailable. Use Edit Prompt or the default prompt.'
+      );
       return;
     }
 
     recognizer.addEventListener('result', (event) => {
       const {transcript, isFinal} = event;
       this.currentPrompt = transcript || this.currentPrompt;
+      if (this.promptKeyboard) {
+        this.promptKeyboard.setText(this.currentPrompt);
+      }
       this.refreshPromptText();
       if (isFinal) {
         this.isRecordingPrompt = false;
@@ -296,7 +352,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   refreshPromptText() {
     if (this.promptText) {
-      this.promptText.text = `Prompt: ${this.currentPrompt}`;
+      const prompt = this.currentPrompt || '(empty)';
+      this.promptText.text = `Prompt: ${prompt}`;
     }
   }
 
@@ -326,6 +383,35 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.statusText) {
       this.statusText.text = text;
     }
+  }
+
+  togglePromptEditor() {
+    if (!this.promptKeyboard) return;
+    if (this.isPromptEditorOpen) {
+      this.hidePromptEditor('Prompt editor closed.');
+      return;
+    }
+
+    this.isPromptEditorOpen = true;
+    this.promptKeyboard.setText(this.currentPrompt || '');
+    this.promptKeyboard.visible = true;
+    this.setStatus('Prompt editor open. Type on the XR keyboard and press Enter.');
+  }
+
+  hidePromptEditor(statusText = 'Prompt editor closed.') {
+    if (!this.promptKeyboard) return;
+    this.isPromptEditorOpen = false;
+    this.promptKeyboard.visible = false;
+    this.setStatus(statusText);
+  }
+
+  restoreDefaultPrompt() {
+    this.currentPrompt = DEFAULT_PROMPT;
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+    this.refreshPromptText();
+    this.setStatus('Default prompt restored.');
   }
 
   async captureScreenshot() {
@@ -503,41 +589,65 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   buildWorkspaceSnapshot() {
-    if (!this.activeModelViewer || !this.currentAssetRecord) {
-      return {
-        assets: [],
-      };
-    }
-
     return {
-      assets: [
-        {
-          assetId: this.currentAssetRecord.assetId,
-          latentHandle: this.currentAssetRecord.latentHandle,
-          glbUrl: this.currentAssetRecord.glbUrl,
-          prompt: this.currentAssetRecord.prompt,
-          thumbnailUrl: this.currentAssetRecord.thumbnailUrl,
-          transform: matrixToArray(this.activeModelViewer),
-          selections: [],
-        },
-      ],
+      sessionId: this.sessionId,
+      prompt: this.currentPrompt,
+      lastScreenshotDataUrl: this.lastScreenshotDataUrl,
+      assets:
+        !this.activeModelViewer || !this.currentAssetRecord
+          ? []
+          : [
+              {
+                assetId: this.currentAssetRecord.assetId,
+                latentHandle: this.currentAssetRecord.latentHandle,
+                glbUrl: this.currentAssetRecord.glbUrl,
+                prompt: this.currentAssetRecord.prompt,
+                thumbnailUrl: this.currentAssetRecord.thumbnailUrl,
+                transform: matrixToArray(this.activeModelViewer),
+                selections: [],
+              },
+            ],
     };
   }
 
   async saveWorkspace() {
     const workspace = this.buildWorkspaceSnapshot();
-    await this.apiClient.saveWorkspace(workspace);
+    const saved = await this.apiClient.saveWorkspace(workspace);
+    const destination = this.apiClient.getStorageLabel();
+    const savedAt = saved?.savedAt
+      ? new Date(saved.savedAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : 'just now';
+
     if (workspace.assets.length === 0) {
-      this.setStatus('Workspace saved with no assets yet.');
+      this.setStatus(`Workspace saved to ${destination} with no assets yet (${savedAt}).`);
       return;
     }
-    this.setStatus('Workspace saved locally through the scaffold client.');
+    this.setStatus(`Workspace saved to ${destination} at ${savedAt}.`);
   }
 
   async loadWorkspace() {
     const saved = await this.apiClient.loadWorkspace();
-    if (!saved?.workspace?.assets?.length) {
-      this.setStatus('No saved workspace found.');
+    if (!saved?.workspace) {
+      this.setStatus(`No saved workspace found in ${this.apiClient.getStorageLabel()}.`);
+      return;
+    }
+
+    this.currentPrompt = saved.workspace.prompt || this.currentPrompt;
+    this.refreshPromptText();
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+
+    if (saved.workspace.lastScreenshotDataUrl) {
+      this.lastScreenshotDataUrl = saved.workspace.lastScreenshotDataUrl;
+      this.previewImage.load(this.lastScreenshotDataUrl);
+    }
+
+    if (!saved.workspace.assets?.length) {
+      this.setStatus(`Workspace restored from ${this.apiClient.getStorageLabel()} with no assets.`);
       return;
     }
 
@@ -556,7 +666,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
     this.currentPrompt = asset.prompt || this.currentPrompt;
     this.refreshPromptText();
-    this.setStatus('Workspace restored from the scaffold client save.');
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+    this.setStatus(`Workspace restored from ${this.apiClient.getStorageLabel()}.`);
   }
 
   applyTransformToActiveModel(transformArray) {
@@ -584,6 +697,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.activeModelViewer) {
       this.remove(this.activeModelViewer);
       this.activeModelViewer = null;
+    }
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+      this.hidePromptEditor('Workspace reset.');
     }
     this.updateMicDiagnostics();
     this.setStatus('Workspace reset.');

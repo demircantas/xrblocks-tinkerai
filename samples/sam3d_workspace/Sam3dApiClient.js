@@ -39,6 +39,10 @@ export class Sam3dApiClient {
     this.useBackend = Boolean(this.backendUrl);
   }
 
+  getStorageLabel() {
+    return this.useBackend ? 'mock backend' : 'local scaffold client';
+  }
+
   async createGenerationJob({sessionId, prompt, image}) {
     if (this.useBackend) {
       const response = await fetch(`${this.backendUrl}/generate`, {
@@ -182,3 +186,4 @@ export class Sam3dApiClient {
     }
   }
 }
+
