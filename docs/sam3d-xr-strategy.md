@@ -47,8 +47,8 @@ The repository already contains useful pieces of this workflow, but it does not 
 - The current desktop selection prototype is voxel-index based. It does not yet store mesh vertex selections as the canonical XR state.
 - The current desktop combine path supports exactly two objects.
 - The current desktop combine path does not yet implement the full `compose_latents.ipynb` workflow.
-- The frontend selection interface for XR Blocks has not yet been implemented.
-- The frontend and backend do not yet share a finalized multi-object composition contract.
+- The XR Blocks sample now supports mesh selection with keep/discard painting, saves canonical kept vertex indices, and persists selection state to the backend-backed workspace payload.
+- The frontend still lacks an asset-catalog workflow, a non-destructive kept-only visualization mode, and a compose action wired to the backend contract.
 
 ## Agreed State Model
 
@@ -182,6 +182,9 @@ The XR frontend is responsible for:
 - allowing object placement, rotation, and scale
 - capturing mesh selections
 - storing transform matrices and selection records in workspace state
+- browsing previously saved assets and workspaces from backend catalog routes
+- loading multiple assets into one live workspace
+- providing a non-destructive visualization mode that shows only the kept mesh region for any asset
 - sending composition requests that reference existing backend latent handles
 
 The frontend should not attempt to recompute latent-space edits locally.
@@ -498,8 +501,13 @@ To avoid ambiguity:
 - backend propagation converts those mesh selections into latent keep sets
 - proximity is part of the selection contract
 - if an asset has no selections, the whole asset is considered selected
+- keep/discard painting in the XR UI is only an editing affordance; the saved canonical state remains kept vertex indices
 
 This keeps the frontend independent from latent topology while still allowing latent-aware composition on the backend.
+
+### Current frontend selection implementation note
+
+The current XR Blocks sample computes selection from recorded brush stroke points on release. The live brush visualization is currently sphere-based because it is stable and performant enough for headset testing. A marching-cubes or metaball brush may still be revisited later as a polish task, but it is not required for the saved contract.
 
 ## Multi-Object Strategy
 
@@ -517,12 +525,13 @@ The API should not be special-cased for only two objects.
 
 The next backend and frontend work should be:
 
-1. Finalize the XR frontend state model around `transformMatrix` plus mesh `vertexIndices`.
-2. Implement the XR selection UI.
-3. Promote the `compose_latents.ipynb` workflow into a backend composition service.
-4. Replace the current two-object combine limitation with an `N`-object composition endpoint.
-5. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
-6. Keep save/load centered on frontend editing state, not latent upload.
+1. Add a frontend asset-catalog workflow backed by `GET /assets` so the user can browse and load multiple saved assets into the current workspace.
+2. Add a workspace-browsing workflow backed by `GET /workspaces` so users can reopen prior sessions intentionally instead of only restoring the latest saved workspace.
+3. Add a non-destructive per-asset visualization mode that renders only the kept region of the mesh while preserving the original mesh and saved selection state.
+4. Keep save/load centered on frontend editing state, not latent upload.
+5. Promote the `compose_latents.ipynb` workflow into a backend composition service.
+6. Replace the current two-object combine limitation with an `N`-object composition endpoint.
+7. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
 
 ## Summary
 
@@ -532,6 +541,9 @@ The agreed strategy is:
 - keep latents on the backend
 - let the frontend store transforms and mesh selections only
 - support multiple saved assets in one workspace
+- let the user browse backend asset and workspace catalogs instead of only restoring the most recent saved object implicitly
+- provide a non-destructive kept-only visualization mode for loaded assets
 - compose any number of assets by propagating mesh selection to latent voxels, applying transforms, and decoding a new asset on the backend
 
 This is the workflow both the backend and the XR Blocks frontend should implement against going forward.
+
