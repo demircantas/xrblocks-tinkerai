@@ -11,6 +11,7 @@ const STATUS_INTERVAL_MS = 120;
 const SCULPT_RESOLUTION = 28;
 const SCULPT_SUBTRACT = 12;
 const SCULPT_MAX_POLYGONS = 12000;
+const USE_DEBUG_SPHERE_BRUSH = true;
 
 export class MeshSelectionController {
   constructor({
@@ -378,6 +379,12 @@ export class MeshSelectionController {
       return;
     }
 
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      this.sculptMesh = new THREE.Group();
+      this.overlay.add(this.sculptMesh);
+      return;
+    }
+
     const material = new THREE.MeshStandardMaterial({
       color: this.paintMode === 'keep' ? 0x22c55e : 0xef4444,
       transparent: true,
@@ -403,6 +410,14 @@ export class MeshSelectionController {
     if (!this.sculptMesh) {
       return;
     }
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      for (const child of this.sculptMesh.children || []) {
+        child.material?.color?.set(
+          this.paintMode === 'keep' ? 0x22c55e : 0xef4444
+        );
+      }
+      return;
+    }
     this.sculptMesh.material.color.set(
       this.paintMode === 'keep' ? 0x22c55e : 0xef4444
     );
@@ -414,13 +429,44 @@ export class MeshSelectionController {
       return;
     }
     this.overlay.remove(this.sculptMesh);
-    this.sculptMesh.material?.dispose?.();
-    this.sculptMesh.geometry?.dispose?.();
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      for (const child of this.sculptMesh.children || []) {
+        child.geometry?.dispose?.();
+        child.material?.dispose?.();
+      }
+    } else {
+      this.sculptMesh.material?.dispose?.();
+      this.sculptMesh.geometry?.dispose?.();
+    }
     this.sculptMesh = null;
   }
 
   rebuildSculptMesh() {
     if (!this.sculptMesh || !this.strokeWorldPoints.length) {
+      return;
+    }
+
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      for (const child of [...this.sculptMesh.children]) {
+        this.sculptMesh.remove(child);
+        child.geometry?.dispose?.();
+        child.material?.dispose?.();
+      }
+      const color = this.paintMode === 'keep' ? 0x22c55e : 0xef4444;
+      const radius = Math.max(this.visualBrushRadius, 0.01);
+      for (const point of this.strokeWorldPoints) {
+        const sphere = new THREE.Mesh(
+          new THREE.SphereGeometry(radius, 12, 12),
+          new THREE.MeshStandardMaterial({
+            color,
+            transparent: true,
+            opacity: 0.45,
+            depthWrite: false,
+          })
+        );
+        sphere.position.copy(point);
+        this.sculptMesh.add(sphere);
+      }
       return;
     }
 
@@ -618,6 +664,7 @@ export class MeshSelectionController {
     this.sampleDrawFromSource(this.activePinchSource);
   }
 }
+
 
 
 
