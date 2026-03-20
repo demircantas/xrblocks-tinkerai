@@ -3,6 +3,7 @@ import * as xb from 'xrblocks';
 import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 
 import {Sam3dApiClient} from './Sam3dApiClient.js';
+import {MeshSelectionController} from './MeshSelectionController.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
@@ -12,7 +13,7 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
   false
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
-const SAMPLE_VERSION = 'workspace-refactor-v1';
+const SAMPLE_VERSION = 'workspace-selection-v1';
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -57,6 +58,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.promptKeyboard = null;
     this.assetInstances = new Map();
     this.activeAssetId = null;
+    this.selectionController = null;
+    this.isSelectionMode = false;
     this.workspaceState = this.createEmptyWorkspaceState();
   }
 
@@ -74,9 +77,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.addLights();
     this.createWorkspaceUI();
     this.createPromptKeyboard();
+    this.createSelectionController();
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
     this.refreshPromptText();
+    this.updateSelectionUi();
     this.setStatus(
       USE_DESKTOP_GEMINI_CAPTURE
         ? 'Ready. Capture will use assets/desktop_gemini.png for testing.'
@@ -94,7 +99,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   createWorkspaceUI() {
     this.panel = new xb.SpatialPanel({
       width: 0.92,
-      height: 1.1,
+      height: 1.18,
       backgroundColor: '#1f2937EE',
       useDefaultPosition: false,
     });
@@ -252,6 +257,56 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
     loadButton.onTriggered = () => this.loadWorkspace();
 
+    const selectionHeaderRow = grid.addRow({weight: 0.05});
+    selectionHeaderRow.addText({
+      text: 'Selection',
+      fontSizeDp: 16,
+      fontColor: '#9ca3af',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    const selectionRow = grid.addRow({weight: 0.11});
+    this.selectionModeButton = selectionRow
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Select: OFF',
+        backgroundColor: '#374151',
+        fontColor: '#ffffff',
+        fontSizeDp: 17,
+        opacity: 0.98,
+        width: 0.82,
+        height: 0.62,
+      });
+    this.selectionModeButton.onTriggered = () => this.toggleSelectionMode();
+
+    this.previewSelectionButton = selectionRow
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Preview Sel',
+        backgroundColor: '#991b1b',
+        fontColor: '#ffffff',
+        fontSizeDp: 17,
+        opacity: 0.98,
+        width: 0.82,
+        height: 0.62,
+      });
+    this.previewSelectionButton.onTriggered = () => this.previewSelection();
+
+    this.clearSelectionButton = selectionRow
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Clear Sel',
+        backgroundColor: '#4b5563',
+        fontColor: '#ffffff',
+        fontSizeDp: 17,
+        opacity: 0.98,
+        width: 0.82,
+        height: 0.62,
+      });
+    this.clearSelectionButton.onTriggered = () => this.clearSelection();
+
     const diagnosticsHeaderRow = grid.addRow({weight: 0.05});
     diagnosticsHeaderRow.addText({
       text: 'Diagnostics',
@@ -284,7 +339,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingX: 0.03,
     });
 
-    const previewFrameRow = grid.addRow({weight: 0.24});
+    const previewFrameRow = grid.addRow({weight: 0.22});
     const previewFrame = previewFrameRow.addPanel({
       backgroundColor: '#0f172acc',
       height: 0.92,
@@ -331,7 +386,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     grid.addRow({weight: 0.1}).addText({
       text:
         'Version: ' + SAMPLE_VERSION + '\n' +
-        'Workspace refactor: backend-backed assets, transformMatrix persistence, and selection-ready asset state.',
+        'Workspace assets now persist canonical mesh selections per asset.',
       fontSizeDp: 12,
       fontColor: '#94a3b8',
       anchorX: 'left',
@@ -364,6 +419,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.refreshPromptText();
       this.hidePromptEditor('Prompt updated from keyboard.');
     };
+  }
+
+  createSelectionController() {
+    this.selectionController = new MeshSelectionController({
+      sceneRoot: this,
+      onSelectionChanged: ({assetId, selections, selectedVertexCount}) => {
+        this.handleSelectionChanged(assetId, selections, selectedVertexCount);
+      },
+      onStatus: (text) => this.setStatus(text),
+    });
   }
 
   bindSpeechRecognizer() {
@@ -404,14 +469,21 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   refreshPromptText() {
-    if (this.promptText) {
-      const prompt = this.currentPrompt || '(empty)';
-      const assetCount = this.workspaceState.assets.length;
-      const activeSuffix = this.activeAssetId
-        ? ` | Active asset: ${this.activeAssetId}`
-        : '';
-      this.promptText.text = `Prompt: ${prompt}\nAssets: ${assetCount}${activeSuffix}`;
+    if (!this.promptText) {
+      return;
     }
+
+    const prompt = this.currentPrompt || '(empty)';
+    const assetCount = this.workspaceState.assets.length;
+    const activeAsset = this.activeAssetId ? this.getAssetRecord(this.activeAssetId) : null;
+    const activeSuffix = this.activeAssetId
+      ? ` | Active asset: ${this.activeAssetId}`
+      : '';
+    const selectionSuffix = activeAsset?.selections?.length
+      ? ` | Selection groups: ${activeAsset.selections.length}`
+      : '';
+    this.promptText.text =
+      `Prompt: ${prompt}\nAssets: ${assetCount}${activeSuffix}${selectionSuffix}`;
   }
 
   updateMicDiagnostics(extraMessage = '') {
@@ -434,6 +506,36 @@ export class Sam3dWorkspaceScene extends xb.Script {
   updateRecordButton() {
     if (!this.recordButton) return;
     this.recordButton.text = this.isRecordingPrompt ? 'Stop' : 'Record';
+  }
+
+  updateSelectionUi() {
+    if (!this.selectionModeButton || !this.previewSelectionButton || !this.clearSelectionButton) {
+      return;
+    }
+
+    const hasTarget = !!this.activeAssetId && !!this.assetInstances.get(this.activeAssetId);
+    const selectionCount = this.selectionController?.getSelectionCount() || 0;
+
+    this.selectionModeButton.text = hasTarget
+      ? this.isSelectionMode
+        ? 'Select: ON'
+        : 'Select: OFF'
+      : 'Select: N/A';
+    this.selectionModeButton.backgroundColor = hasTarget
+      ? this.isSelectionMode
+        ? '#dc2626'
+        : '#374151'
+      : '#1f2937';
+
+    this.previewSelectionButton.text = `Preview (${selectionCount})`;
+    this.previewSelectionButton.backgroundColor = hasTarget && selectionCount > 0
+      ? '#991b1b'
+      : '#1f2937';
+
+    this.clearSelectionButton.text = selectionCount > 0 ? 'Clear Sel' : 'Clear (0)';
+    this.clearSelectionButton.backgroundColor = hasTarget && selectionCount > 0
+      ? '#4b5563'
+      : '#1f2937';
   }
 
   setStatus(text) {
@@ -495,9 +597,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         image = await loadImageAsDataUrl(DESKTOP_GEMINI_CAPTURE_URL);
       } else {
         const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
-        image = await xb.core.screenshotSynthesizer.getScreenshot(
-          useCameraOverlay
-        );
+        image = await xb.core.screenshotSynthesizer.getScreenshot(useCameraOverlay);
       }
 
       this.lastScreenshotDataUrl = image;
@@ -570,6 +670,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   setActiveAsset(assetId) {
     this.activeAssetId = assetId;
+    this.syncSelectionController();
     this.refreshPromptText();
   }
 
@@ -587,6 +688,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.workspaceState.assets.push(assetRecord);
     }
     this.refreshPromptText();
+    this.updateSelectionUi();
   }
 
   removeAssetInstance(assetId) {
@@ -594,12 +696,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!model) return;
     this.remove(model);
     this.assetInstances.delete(assetId);
+    if (this.activeAssetId === assetId) {
+      this.activeAssetId = null;
+    }
   }
 
   clearAssetInstances() {
     for (const assetId of [...this.assetInstances.keys()]) {
       this.removeAssetInstance(assetId);
     }
+    this.syncSelectionController();
   }
 
   getDefaultPlacementForIndex(index) {
@@ -644,6 +750,106 @@ export class Sam3dWorkspaceScene extends xb.Script {
       lastScreenshotDataUrl: this.lastScreenshotDataUrl,
       assets,
     };
+  }
+
+  handleSelectionChanged(assetId, selections, selectedVertexCount) {
+    if (!assetId) {
+      return;
+    }
+    const assetRecord = this.getAssetRecord(assetId);
+    if (!assetRecord) {
+      return;
+    }
+
+    this.upsertAssetRecord({
+      ...assetRecord,
+      selections,
+    });
+
+    if (selectedVertexCount === 0) {
+      this.setStatus(`Selection cleared for ${assetId}.`);
+    }
+  }
+
+  syncSelectionController() {
+    if (!this.selectionController) {
+      return;
+    }
+
+    const activeAssetId = this.activeAssetId;
+    const activeModel = activeAssetId ? this.assetInstances.get(activeAssetId) : null;
+    const activeAssetRecord = activeAssetId ? this.getAssetRecord(activeAssetId) : null;
+
+    if (activeAssetId && activeModel && activeAssetRecord) {
+      this.selectionController.attach({
+        assetId: activeAssetId,
+        model: activeModel,
+        selections: activeAssetRecord.selections || [],
+      });
+      this.selectionController.setDrawMode(this.isSelectionMode);
+    } else {
+      this.selectionController.detach();
+    }
+
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+  }
+
+  applyWorkspaceInteractionPolicy() {
+    const allowModelInteraction =
+      !this.isSelectionMode || !this.selectionController?.hasTarget();
+
+    for (const model of this.assetInstances.values()) {
+      model.draggable = allowModelInteraction;
+      model.rotatable = allowModelInteraction;
+      model.scalable = allowModelInteraction;
+      model.traverse((node) => {
+        node.ignoreReticleRaycast = !allowModelInteraction;
+      });
+    }
+  }
+
+  toggleSelectionMode() {
+    if (!this.activeAssetId || !this.assetInstances.get(this.activeAssetId)) {
+      this.setStatus('Load or generate an asset before entering selection mode.');
+      return;
+    }
+
+    this.isSelectionMode = !this.isSelectionMode;
+    this.selectionController.setDrawMode(this.isSelectionMode);
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+    this.setStatus(
+      this.isSelectionMode
+        ? `Selection mode enabled for ${this.activeAssetId}. Pinch-drag over the mesh to keep vertices.`
+        : 'Selection mode disabled. Object manipulation restored.'
+    );
+  }
+
+  previewSelection() {
+    if (!this.selectionController?.hasTarget()) {
+      this.setStatus('No active asset is ready for selection preview.');
+      return;
+    }
+
+    const count = this.selectionController.renderSelectionPreview();
+    this.updateSelectionUi();
+    if (count === 0) {
+      this.setStatus('No selected vertices to preview yet.');
+      return;
+    }
+    this.setStatus(`Previewing ${count} kept vertices in red.`);
+  }
+
+  clearSelection() {
+    if (!this.selectionController?.hasTarget()) {
+      this.setStatus('No active asset is ready for selection editing.');
+      return;
+    }
+
+    this.selectionController.clearSelection();
+    this.updateSelectionUi();
+    this.setStatus(`Selection cleared for ${this.activeAssetId}.`);
   }
 
   async generateAsset() {
@@ -742,6 +948,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     if (setActive) {
       this.setActiveAsset(assetRecord.assetId);
+    } else {
+      this.applyWorkspaceInteractionPolicy();
+      this.updateSelectionUi();
     }
 
     return model;
@@ -836,6 +1045,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
+    this.syncSelectionController();
     this.setStatus(
       `Workspace restored from ${this.apiClient.getStorageLabel()} with no assets.`
     );
@@ -862,6 +1072,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.currentJobId = null;
     this.clearAssetInstances();
     this.activeAssetId = null;
+    this.isSelectionMode = false;
+    this.selectionController?.detach();
     this.lastScreenshotDataUrl = '';
     this.previewImage.load('');
     this.workspaceState = this.createEmptyWorkspaceState();
@@ -871,8 +1083,35 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.hidePromptEditor('Workspace reset.');
     }
     this.updateMicDiagnostics();
+    this.updateSelectionUi();
     this.refreshPromptText();
     this.setStatus('Workspace reset.');
   }
-}
 
+  onSelectStart(event) {
+    this.selectionController?.onSelectStart(event);
+  }
+
+  onSelecting(event) {
+    this.selectionController?.onSelecting(event);
+  }
+
+  onSelectEnd(event) {
+    this.selectionController?.onSelectEnd(event);
+  }
+
+  update() {
+    this.selectionController?.update();
+  }
+
+  dispose() {
+    if (this.pollHandle) {
+      clearInterval(this.pollHandle);
+      this.pollHandle = null;
+    }
+    this.selectionController?.dispose();
+    this.selectionController = null;
+    this.clearAssetInstances();
+    super.dispose();
+  }
+}
