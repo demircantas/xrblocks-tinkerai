@@ -2,16 +2,16 @@
 
 ## Purpose
 
-This document is the current source of truth for integrating the XR Blocks frontend with the SAM3D backend.
+This document is the current source of truth for integrating the XR Blocks frontend with the SAM3D backend in this repository.
 
 It defines:
 
 - the agreed end-to-end user workflow
 - the canonical frontend and backend state model
 - the backend contract the XR frontend should target
-- the gaps between the desired workflow and the current frontend sample state
+- the gaps between the desired workflow and the current repository state
 
-This document replaces the earlier phase-1 note that was centered on a single-asset prototype and a mock backend contract.
+This document replaces older prototype notes that were centered on a mock backend and a narrower single-asset flow.
 
 ## Agreed Product Workflow
 
@@ -28,46 +28,37 @@ The target workflow is:
 9. The user can request composition of two or more saved objects.
 10. The backend applies each object's saved transform and mesh selection to its latent field, composes the transformed latent fields into a new voxel space, decodes a new mesh, stores the new latents and mesh, and returns the composed `glb`.
 
-## Frontend Repo Reality
+## Current Repo Reality
 
-This repository already contains a useful XR sample, but it is still phase-1 and narrower than the agreed workflow.
+The repository already contains useful pieces of this workflow, but it does not yet implement the full target behavior.
 
 ### What already exists
 
-- screenshot capture through `ScreenshotSynthesizer`
-- speech prompt capture plus manual prompt fallback
-- job-based generation polling
-- loading a returned asset into `ModelViewer`
-- save/load of one workspace record
-- storage of a serialized object transform
+- Backend generation already saves stage-2 latent data server-side in `handoff/sample.npz` and mesh metadata in `handoff/meta.json`.
+- Backend generation already exports a `mesh_0.glb` for each generated asset.
+- The desktop experiment frontend can already request generated meshes and render them.
+- The desktop experiment backend can already expose voxel positions derived from saved latents for selection work.
+- The desktop experiment backend can already combine two assets using either a plane split or explicit voxel-index selections.
+- The latent-composition notebook in [compose_latents.ipynb](/home/farazfaruqi/sam-3d-objects/get_latents/coco_sample/compose_latents.ipynb) already demonstrates the richer workflow we ultimately want on the backend: filter, transform, compose, reproject, decode, and export.
 
-Relevant files:
+### What is broken or incomplete
 
-- [Sam3dWorkspaceScene.js](/home/farazfaruqi/xrblocks-tinkerai/samples/sam3d_workspace/Sam3dWorkspaceScene.js)
-- [Sam3dApiClient.js](/home/farazfaruqi/xrblocks-tinkerai/samples/sam3d_workspace/Sam3dApiClient.js)
-- [README.md](/home/farazfaruqi/xrblocks-tinkerai/samples/sam3d_workspace/README.md)
+- The generation path now uses prompt-driven object isolation before SAM3D, but the quality of the isolated mask is still model- and scene-dependent.
+- The current desktop selection prototype is voxel-index based. It does not yet store mesh vertex selections as the canonical XR state.
+- The current desktop combine path supports exactly two objects.
+- The current desktop combine path does not yet implement the full `compose_latents.ipynb` workflow.
+- The frontend selection interface for XR Blocks has not yet been implemented.
+- The frontend and backend do not yet share a finalized multi-object composition contract.
 
-### What is incomplete
-
-- the current sample only manages one active asset
-- the current sample saves `transform`, but not the finalized `transformMatrix` field name
-- the current sample saves empty `selections`
-- the XR mesh selection interface is not implemented yet
-- there is no multi-asset workspace UI yet
-- there is no asset-listing UI yet
-- there is no compose flow yet
-
-## Core Principle
+## Agreed State Model
 
 The frontend should never receive raw latent tensors. Latents remain backend-only.
 
-All durable state and generated files should be stored on the backend, not in frontend session memory.
-
 The frontend should store only asset references plus editing state.
 
-## Canonical Frontend State Model
+All durable state and generated files should be stored on the backend, not in frontend session memory.
 
-### Asset record
+### Canonical asset record
 
 Each generated or composed object should be represented by an asset record with at least:
 
@@ -83,11 +74,11 @@ Each generated or composed object should be represented by an asset record with 
 
 `latentHandle` is the backend key used to retrieve the latent field for later composition. Initially, `assetId` and `latentHandle` may be the same underlying identifier.
 
-### Selection record
+### Canonical selection record
 
 The frontend should store mesh-based selection state, not latent state.
 
-For now, the canonical representation is:
+For now, the agreed canonical representation is:
 
 ```ts
 type MeshSelection = {
@@ -102,11 +93,11 @@ Notes:
 - `vertexIndices` means the mesh vertices the user chose to keep.
 - `proximity` is the distance threshold used by the backend to propagate mesh selection to structured latent voxels.
 - `nodePath` future-proofs the format for multi-node or multi-submesh assets.
-- If an asset is a single mesh, `nodePath` can be a fixed root value.
+- If the asset is a single mesh, `nodePath` can be a fixed root value.
 
-### Workspace record
+### Canonical workspace record
 
-The workspace must be able to hold multiple assets and the current editing state for each asset.
+The workspace should be able to hold multiple assets and the current editing state for each asset.
 
 Suggested shape:
 
@@ -137,6 +128,24 @@ Suggested shape:
   }
 }
 ```
+
+## Backend Responsibilities
+
+The backend is responsible for:
+
+- receiving screenshot and prompt for generation
+- isolating the target object described by the prompt
+- running SAM3D generation
+- storing generated latents and decoded meshes server-side
+- returning only renderable asset data to the frontend
+- preserving latent handles so later edits refer back to the correct source asset
+- saving and loading workspace state
+- persisting workspaces and assets independently of the current frontend session
+- exposing saved workspaces and assets for later retrieval
+- applying transforms and selection propagation during composition
+- decoding and storing newly composed assets
+
+The backend is not required to send latents to the frontend.
 
 ## Persistence Requirements
 
@@ -177,28 +186,15 @@ The XR frontend is responsible for:
 
 The frontend should not attempt to recompute latent-space edits locally.
 
-## Backend Contract
+## Generation Contract
 
-### Generation routes
+Generation is implemented today and remains job-based.
 
+Routes:
+
+- `GET /healthz`
 - `POST /generate`
 - `GET /jobs/{jobId}`
-
-### Persistence routes
-
-- `GET /assets`
-- `GET /workspaces`
-- `POST /workspaces/{workspaceId}/save`
-- `GET /workspaces/{workspaceId}`
-
-### Future composition route
-
-- `POST /compose`
-- `GET /jobs/{jobId}`
-
-Composition should be job-based in the same style as generation.
-
-## Generation Contract
 
 ### Generate request
 
@@ -233,29 +229,188 @@ Composition should be job-based in the same style as generation.
   "status": "completed",
   "sessionId": "session-...",
   "workspaceId": "workspace-local",
+  "progress": 1.0,
+  "message": "Completed",
+  "createdAt": 1774033750000,
+  "completedAt": 1774033762000,
   "asset": {
     "assetId": "asset-001",
     "glbUrl": "https://.../model.glb",
     "thumbnailUrl": "data:image/png;base64,...",
     "latentHandle": "asset-001",
+    "savedAt": 1774033762000,
+    "sourceType": "generated",
+    "hasLatents": true,
     "metadata": {
-      "prompt": "Generate this coffee mug"
+      "prompt": "Generate this coffee mug",
+      "sessionId": "session-...",
+      "workspaceId": "workspace-local",
+      "jobId": "job-001"
     }
   }
 }
 ```
 
-### Required backend behavior
+### Generate failed response
 
-- use the prompt and screenshot to isolate the intended object before running SAM3D generation
-- save the latent field for later composition
-- return a renderable `glb`
+```json
+{
+  "jobId": "job-001",
+  "status": "failed",
+  "progress": 1.0,
+  "message": "error text",
+  "error": "error text",
+  "completedAt": 1774033762000
+}
+```
+
+### Required behavior
+
+- The backend must use the prompt and screenshot to isolate the intended object before running SAM3D generation.
+- The backend must save the latent field for later composition.
+- The backend must return a renderable `glb`.
+
+## Save And Load Contract
+
+Workspace save and load remain backend-backed persistence.
+
+Routes:
+
+- `GET /assets`
+- `GET /workspaces`
+- `POST /workspaces/{workspaceId}/save`
+- `GET /workspaces/{workspaceId}`
+
+### Current implemented listing responses
+
+`GET /workspaces` returns lightweight summaries:
+
+```json
+{
+  "items": [
+    {
+      "workspaceId": "workspace-local",
+      "savedAt": 1774033754093,
+      "assetCount": 1,
+      "prompt": "Generate this coffee mug",
+      "sessionId": "session-..."
+    }
+  ],
+  "count": 1
+}
+```
+
+`GET /assets` returns persisted or discovered asset summaries:
+
+```json
+{
+  "items": [
+    {
+      "assetId": "asset-001",
+      "latentHandle": "asset-001",
+      "glbUrl": "https://.../api/models/asset-001/mesh_0.glb",
+      "thumbnailUrl": null,
+      "savedAt": 1774033704725,
+      "sourceType": "generated",
+      "hasLatents": true,
+      "metadata": {
+        "prompt": "Generate this coffee mug",
+        "workspaceId": null,
+        "jobId": null
+      }
+    }
+  ],
+  "count": 26
+}
+```
+
+### Workspace save request
+
+The frontend should write `transformMatrix` going forward.
+
+```json
+{
+  "workspaceId": "workspace-local",
+  "workspace": {
+    "sessionId": "session-...",
+    "prompt": "Generate this coffee mug",
+    "assets": [
+      {
+        "assetId": "asset-001",
+        "latentHandle": "asset-001",
+        "glbUrl": "https://.../api/models/asset-001/mesh_0.glb",
+        "transformMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        "selections": [
+          {
+            "nodePath": "/mesh0",
+            "vertexIndices": [1, 2, 3],
+            "proximity": 0.03
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Workspace save/load response
+
+```json
+{
+  "workspaceId": "workspace-local",
+  "savedAt": 1774033754093,
+  "workspace": {
+    "sessionId": "session-...",
+    "prompt": "Generate this coffee mug",
+    "assets": [
+      {
+        "assetId": "asset-001",
+        "latentHandle": "asset-001",
+        "glbUrl": "https://.../api/models/asset-001/mesh_0.glb",
+        "transformMatrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        "selections": [
+          {
+            "nodePath": "/mesh0",
+            "vertexIndices": [1, 2, 3],
+            "proximity": 0.03
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The backend should treat the workspace payload as the source of truth for frontend editing state:
+
+- transform matrices
+- current selections
+- current asset list
+- current prompt and last screenshot
+
+The backend should not require the frontend to upload latents as part of save/load.
+
+`workspaceId` must be stable across sessions so a saved workspace can be reopened later by any frontend session with access to the backend.
+
+The backend should also expose a stable asset-listing route so the frontend can discover previously generated and composed assets without relying on only the currently loaded workspace.
+
+Compatibility note:
+
+- older saved workspaces in this repo may still use `transform` instead of `transformMatrix`
+- new frontend work should write `transformMatrix`
+- frontend loaders should read `transformMatrix ?? transform` until old saved state is migrated
 
 ## Composition Contract
 
-The current phase-1 frontend does not implement this yet, but this is the contract it should target.
+Composition should also be job-based.
+
+The current combine route in the desktop experiment is a useful prototype, but it is too limited for the XR workflow because it only supports two objects and works directly with voxel indices.
+
+The XR-facing contract should support an arbitrary number of source assets.
 
 ### Compose request
+
+Suggested shape:
 
 ```json
 {
@@ -285,6 +440,12 @@ The current phase-1 frontend does not implement this yet, but this is the contra
           "proximity": 2.0
         }
       ]
+    },
+    {
+      "assetId": "asset-c",
+      "latentHandle": "asset-c",
+      "transformMatrix": [0.8, 0, 0, 0, 0, 0.8, 0, 0, 0, 0, 0.8, 0, -0.2, 0, 0, 1],
+      "selections": []
     }
   ],
   "compose": {
@@ -306,9 +467,11 @@ For each source asset, the backend should:
 7. decode the composed latent field into a new mesh
 8. save the new mesh and latent field as a new derived asset
 
-The frontend does not need to manipulate latents directly. It only sends transforms and mesh selections.
+This is the backend workflow already explored in [compose_latents.ipynb](/home/farazfaruqi/sam-3d-objects/get_latents/coco_sample/compose_latents.ipynb), but the XR API must generalize it from two notebook-loaded assets to an arbitrary-length asset list.
 
 ### Compose response
+
+Composition should return a job first, then a completed asset in the same style as generation:
 
 ```json
 {
@@ -321,7 +484,7 @@ The frontend does not need to manipulate latents directly. It only sends transfo
     "glbUrl": "https://.../asset-composed-001.glb",
     "latentHandle": "asset-composed-001",
     "metadata": {
-      "sourceAssetIds": ["asset-a", "asset-b"]
+      "sourceAssetIds": ["asset-a", "asset-b", "asset-c"]
     }
   }
 }
@@ -340,7 +503,7 @@ This keeps the frontend independent from latent topology while still allowing la
 
 ## Multi-Object Strategy
 
-The frontend and backend should support composition of `N >= 2` assets with the same pipeline:
+The backend should support composition of `N >= 2` assets with the same pipeline:
 
 - each asset contributes a saved latent field
 - each asset contributes zero or more mesh selections
@@ -350,17 +513,16 @@ The frontend and backend should support composition of `N >= 2` assets with the 
 
 The API should not be special-cased for only two objects.
 
-## Immediate Frontend Work
+## Immediate Implementation Priorities
 
-The next frontend work should be:
+The next backend and frontend work should be:
 
-1. Move from one active asset to a workspace-level asset list.
-2. Rename persisted `transform` state to `transformMatrix`.
-3. Implement mesh selection UI and store real `selections`.
-4. Add UI for listing and loading saved workspaces from the backend.
-5. Add UI for listing and reloading saved assets from the backend.
-6. Add a composition flow that submits multiple assets, transforms, and selections to the backend.
-7. Keep all durable state backend-backed when `backendUrl` is provided.
+1. Finalize the XR frontend state model around `transformMatrix` plus mesh `vertexIndices`.
+2. Implement the XR selection UI.
+3. Promote the `compose_latents.ipynb` workflow into a backend composition service.
+4. Replace the current two-object combine limitation with an `N`-object composition endpoint.
+5. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
+6. Keep save/load centered on frontend editing state, not latent upload.
 
 ## Summary
 
@@ -372,4 +534,4 @@ The agreed strategy is:
 - support multiple saved assets in one workspace
 - compose any number of assets by propagating mesh selection to latent voxels, applying transforms, and decoding a new asset on the backend
 
-This is the workflow the XR Blocks frontend should implement against going forward.
+This is the workflow both the backend and the XR Blocks frontend should implement against going forward.

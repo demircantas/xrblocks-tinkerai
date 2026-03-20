@@ -14,12 +14,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   options.xrButton.showEnterSimulatorButton = true;
   options.setAppTitle('SAM3D Workspace');
   options.setAppDescription(
-    'Phase-1 scaffold for screenshot capture, prompt input, job-based generation, and editable asset placement.'
+    'Workspace refactor for screenshot capture, prompt input, backend generation, and multi-asset placement.'
   );
 
   xb.add(new Sam3dWorkspaceScene());
   await xb.init(options);
 });
-
-
-

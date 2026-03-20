@@ -12,7 +12,7 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
   false
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
-const SAMPLE_VERSION = 'ui-refactor-v3';
+const SAMPLE_VERSION = 'workspace-refactor-v1';
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -22,6 +22,10 @@ function getUrlParamString(name, defaultValue = '') {
 function matrixToArray(object3D) {
   object3D.updateMatrix();
   return object3D.matrix.toArray();
+}
+
+function normalizeTransformMatrix(assetRecord) {
+  return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
 
 async function loadImageAsDataUrl(url) {
@@ -47,12 +51,22 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.currentPrompt = getUrlParamString('prompt', DEFAULT_PROMPT);
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
-    this.currentAssetRecord = null;
-    this.activeModelViewer = null;
     this.pollHandle = null;
     this.isRecordingPrompt = false;
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
+    this.assetInstances = new Map();
+    this.activeAssetId = null;
+    this.workspaceState = this.createEmptyWorkspaceState();
+  }
+
+  createEmptyWorkspaceState() {
+    return {
+      sessionId: this.sessionId,
+      prompt: this.currentPrompt,
+      lastScreenshotDataUrl: this.lastScreenshotDataUrl,
+      assets: [],
+    };
   }
 
   init() {
@@ -309,6 +323,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
     clearButton.onTriggered = () => {
       this.lastScreenshotDataUrl = '';
+      this.workspaceState.lastScreenshotDataUrl = '';
       this.previewImage.load('');
       this.setStatus('Screenshot preview cleared.');
     };
@@ -316,7 +331,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     grid.addRow({weight: 0.1}).addText({
       text:
         'Version: ' + SAMPLE_VERSION + '\n' +
-        'Phase 1 scaffold for screenshot, prompt editing, mic diagnostics, job polling, and asset preview.',
+        'Workspace refactor: backend-backed assets, transformMatrix persistence, and selection-ready asset state.',
       fontSizeDp: 12,
       fontColor: '#94a3b8',
       anchorX: 'left',
@@ -338,12 +353,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.promptKeyboard.onTextChanged = (text) => {
       this.currentPrompt = text || '';
+      this.workspaceState.prompt = this.currentPrompt;
       this.refreshPromptText();
       this.setStatus('Editing prompt manually...');
     };
 
     this.promptKeyboard.onEnterPressed = (text) => {
       this.currentPrompt = text || this.currentPrompt;
+      this.workspaceState.prompt = this.currentPrompt;
       this.refreshPromptText();
       this.hidePromptEditor('Prompt updated from keyboard.');
     };
@@ -361,6 +378,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     recognizer.addEventListener('result', (event) => {
       const {transcript, isFinal} = event;
       this.currentPrompt = transcript || this.currentPrompt;
+      this.workspaceState.prompt = this.currentPrompt;
       if (this.promptKeyboard) {
         this.promptKeyboard.setText(this.currentPrompt);
       }
@@ -388,7 +406,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
   refreshPromptText() {
     if (this.promptText) {
       const prompt = this.currentPrompt || '(empty)';
-      this.promptText.text = `Prompt: ${prompt}`;
+      const assetCount = this.workspaceState.assets.length;
+      const activeSuffix = this.activeAssetId
+        ? ` | Active asset: ${this.activeAssetId}`
+        : '';
+      this.promptText.text = `Prompt: ${prompt}\nAssets: ${assetCount}${activeSuffix}`;
     }
   }
 
@@ -442,6 +464,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   restoreDefaultPrompt() {
     this.currentPrompt = DEFAULT_PROMPT;
+    this.workspaceState.prompt = this.currentPrompt;
     if (this.promptKeyboard) {
       this.promptKeyboard.setText(this.currentPrompt);
     }
@@ -456,6 +479,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     this.currentPrompt = this.currentPrompt.slice(0, -1);
+    this.workspaceState.prompt = this.currentPrompt;
     if (this.promptKeyboard) {
       this.promptKeyboard.setText(this.currentPrompt);
     }
@@ -477,6 +501,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       }
 
       this.lastScreenshotDataUrl = image;
+      this.workspaceState.lastScreenshotDataUrl = image;
       this.previewImage.load(image);
       this.setStatus(
         USE_DESKTOP_GEMINI_CAPTURE
@@ -543,6 +568,84 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  setActiveAsset(assetId) {
+    this.activeAssetId = assetId;
+    this.refreshPromptText();
+  }
+
+  getAssetRecord(assetId) {
+    return this.workspaceState.assets.find((asset) => asset.assetId === assetId) || null;
+  }
+
+  upsertAssetRecord(assetRecord) {
+    const index = this.workspaceState.assets.findIndex(
+      (asset) => asset.assetId === assetRecord.assetId
+    );
+    if (index >= 0) {
+      this.workspaceState.assets[index] = assetRecord;
+    } else {
+      this.workspaceState.assets.push(assetRecord);
+    }
+    this.refreshPromptText();
+  }
+
+  removeAssetInstance(assetId) {
+    const model = this.assetInstances.get(assetId);
+    if (!model) return;
+    this.remove(model);
+    this.assetInstances.delete(assetId);
+  }
+
+  clearAssetInstances() {
+    for (const assetId of [...this.assetInstances.keys()]) {
+      this.removeAssetInstance(assetId);
+    }
+  }
+
+  getDefaultPlacementForIndex(index) {
+    return {
+      x: ((index % 3) - 1) * 0.32,
+      y: 0.78,
+      z: -1.1 - Math.floor(index / 3) * 0.16,
+    };
+  }
+
+  createAssetRecordFromResponse(asset, existingRecord = null) {
+    return {
+      assetId: asset.assetId,
+      latentHandle: asset.latentHandle,
+      glbUrl: asset.glbUrl,
+      prompt: asset.metadata?.prompt || this.currentPrompt,
+      thumbnailUrl: asset.thumbnailUrl || this.lastScreenshotDataUrl,
+      transformMatrix: normalizeTransformMatrix(existingRecord) || null,
+      selections: existingRecord?.selections || [],
+    };
+  }
+
+  buildWorkspaceSnapshot() {
+    const assets = this.workspaceState.assets.map((assetRecord) => {
+      const model = this.assetInstances.get(assetRecord.assetId);
+      return {
+        assetId: assetRecord.assetId,
+        latentHandle: assetRecord.latentHandle,
+        glbUrl: assetRecord.glbUrl,
+        prompt: assetRecord.prompt,
+        thumbnailUrl: assetRecord.thumbnailUrl,
+        transformMatrix: model
+          ? matrixToArray(model)
+          : normalizeTransformMatrix(assetRecord),
+        selections: assetRecord.selections || [],
+      };
+    });
+
+    return {
+      sessionId: this.workspaceState.sessionId,
+      prompt: this.currentPrompt,
+      lastScreenshotDataUrl: this.lastScreenshotDataUrl,
+      assets,
+    };
+  }
+
   async generateAsset() {
     if (!this.lastScreenshotDataUrl) {
       this.setStatus('Capture a screenshot before generating.');
@@ -602,18 +705,15 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }, POLL_INTERVAL_MS);
   }
 
-  async loadGeneratedAsset(asset) {
-    this.setStatus('Loading generated asset...');
+  async instantiateAssetRecord(assetRecord, {setActive = true} = {}) {
+    this.setStatus(`Loading asset ${assetRecord.assetId}...`);
 
-    if (this.activeModelViewer) {
-      this.remove(this.activeModelViewer);
-      this.activeModelViewer = null;
-    }
+    this.removeAssetInstance(assetRecord.assetId);
 
     const model = new xb.ModelViewer({});
     this.add(model);
 
-    const {path, model: modelName} = this.splitAssetUrl(asset.glbUrl);
+    const {path, model: modelName} = this.splitAssetUrl(assetRecord.glbUrl);
     await model.loadGLTFModel({
       data: {
         path,
@@ -622,19 +722,43 @@ export class Sam3dWorkspaceScene extends xb.Script {
       },
       renderer: xb.core.renderer,
     });
-    model.position.set(0, 0.78, -1.1);
 
-    this.activeModelViewer = model;
-    this.currentAssetRecord = {
-      assetId: asset.assetId,
-      latentHandle: asset.latentHandle,
-      glbUrl: asset.glbUrl,
-      prompt: asset.metadata?.prompt || this.currentPrompt,
-      transform: matrixToArray(model),
-      thumbnailUrl: asset.thumbnailUrl || this.lastScreenshotDataUrl,
-    };
+    const transformMatrix = normalizeTransformMatrix(assetRecord);
+    if (transformMatrix) {
+      this.applyTransformToModel(model, transformMatrix);
+    } else {
+      const placement = this.getDefaultPlacementForIndex(this.workspaceState.assets.length);
+      model.position.set(placement.x, placement.y, placement.z);
+      model.updateMatrix();
+      assetRecord.transformMatrix = matrixToArray(model);
+    }
 
-    this.setStatus('Generated asset loaded. Drag to move and rotate in XR.');
+    this.assetInstances.set(assetRecord.assetId, model);
+    this.upsertAssetRecord({
+      ...assetRecord,
+      transformMatrix: normalizeTransformMatrix(assetRecord) || matrixToArray(model),
+      selections: assetRecord.selections || [],
+    });
+
+    if (setActive) {
+      this.setActiveAsset(assetRecord.assetId);
+    }
+
+    return model;
+  }
+
+  async loadGeneratedAsset(asset) {
+    const existingRecord = this.getAssetRecord(asset.assetId);
+    const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
+    const model = await this.instantiateAssetRecord(assetRecord);
+    assetRecord.transformMatrix = matrixToArray(model);
+    this.upsertAssetRecord(assetRecord);
+    this.currentPrompt = assetRecord.prompt || this.currentPrompt;
+    this.workspaceState.prompt = this.currentPrompt;
+    this.refreshPromptText();
+    this.setStatus(
+      `Generated asset loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
+    );
   }
 
   splitAssetUrl(url) {
@@ -642,28 +766,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return {
       path: url.slice(0, lastSlash),
       model: url.slice(lastSlash),
-    };
-  }
-
-  buildWorkspaceSnapshot() {
-    return {
-      sessionId: this.sessionId,
-      prompt: this.currentPrompt,
-      lastScreenshotDataUrl: this.lastScreenshotDataUrl,
-      assets:
-        !this.activeModelViewer || !this.currentAssetRecord
-          ? []
-          : [
-              {
-                assetId: this.currentAssetRecord.assetId,
-                latentHandle: this.currentAssetRecord.latentHandle,
-                glbUrl: this.currentAssetRecord.glbUrl,
-                prompt: this.currentAssetRecord.prompt,
-                thumbnailUrl: this.currentAssetRecord.thumbnailUrl,
-                transform: matrixToArray(this.activeModelViewer),
-                selections: [],
-              },
-            ],
     };
   }
 
@@ -682,7 +784,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus(`Workspace saved to ${destination} with no assets yet (${savedAt}).`);
       return;
     }
-    this.setStatus(`Workspace saved to ${destination} at ${savedAt}.`);
+    this.setStatus(
+      `Workspace saved to ${destination} at ${savedAt} with ${workspace.assets.length} asset(s).`
+    );
   }
 
   async loadWorkspace() {
@@ -692,54 +796,62 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    this.currentPrompt = saved.workspace.prompt || this.currentPrompt;
+    this.clearAssetInstances();
+    this.workspaceState = {
+      sessionId: saved.workspace.sessionId || this.sessionId,
+      prompt: saved.workspace.prompt || this.currentPrompt,
+      lastScreenshotDataUrl: saved.workspace.lastScreenshotDataUrl || '',
+      assets: [],
+    };
+    this.activeAssetId = null;
+
+    this.currentPrompt = this.workspaceState.prompt;
     this.refreshPromptText();
     if (this.promptKeyboard) {
       this.promptKeyboard.setText(this.currentPrompt);
     }
 
-    if (saved.workspace.lastScreenshotDataUrl) {
-      this.lastScreenshotDataUrl = saved.workspace.lastScreenshotDataUrl;
-      this.previewImage.load(this.lastScreenshotDataUrl);
+    this.lastScreenshotDataUrl = this.workspaceState.lastScreenshotDataUrl;
+    this.previewImage.load(this.lastScreenshotDataUrl || '');
+
+    const savedAssets = saved.workspace.assets || [];
+    for (const savedAsset of savedAssets) {
+      const normalizedRecord = {
+        assetId: savedAsset.assetId,
+        latentHandle: savedAsset.latentHandle,
+        glbUrl: savedAsset.glbUrl,
+        prompt: savedAsset.prompt,
+        thumbnailUrl: savedAsset.thumbnailUrl,
+        transformMatrix: normalizeTransformMatrix(savedAsset),
+        selections: savedAsset.selections || [],
+      };
+      await this.instantiateAssetRecord(normalizedRecord, {setActive: false});
     }
 
-    if (!saved.workspace.assets?.length) {
-      this.setStatus(`Workspace restored from ${this.apiClient.getStorageLabel()} with no assets.`);
+    if (savedAssets.length > 0) {
+      this.setActiveAsset(savedAssets[savedAssets.length - 1].assetId);
+      this.setStatus(
+        `Workspace restored from ${this.apiClient.getStorageLabel()} with ${savedAssets.length} asset(s).`
+      );
       return;
     }
 
-    const asset = saved.workspace.assets[0];
-    await this.loadGeneratedAsset({
-      assetId: asset.assetId,
-      glbUrl: asset.glbUrl,
-      thumbnailUrl: asset.thumbnailUrl,
-      latentHandle: asset.latentHandle,
-      metadata: {prompt: asset.prompt},
-    });
-    this.applyTransformToActiveModel(asset.transform);
-    if (asset.thumbnailUrl) {
-      this.lastScreenshotDataUrl = asset.thumbnailUrl;
-      this.previewImage.load(asset.thumbnailUrl);
-    }
-    this.currentPrompt = asset.prompt || this.currentPrompt;
-    this.refreshPromptText();
-    if (this.promptKeyboard) {
-      this.promptKeyboard.setText(this.currentPrompt);
-    }
-    this.setStatus(`Workspace restored from ${this.apiClient.getStorageLabel()}.`);
+    this.setStatus(
+      `Workspace restored from ${this.apiClient.getStorageLabel()} with no assets.`
+    );
   }
 
-  applyTransformToActiveModel(transformArray) {
-    if (!this.activeModelViewer || !transformArray) return;
+  applyTransformToModel(model, transformArray) {
+    if (!model || !transformArray) return;
     const matrix = new THREE.Matrix4().fromArray(transformArray);
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
     matrix.decompose(position, quaternion, scale);
-    this.activeModelViewer.position.copy(position);
-    this.activeModelViewer.quaternion.copy(quaternion);
-    this.activeModelViewer.scale.copy(scale);
-    this.activeModelViewer.updateMatrix();
+    model.position.copy(position);
+    model.quaternion.copy(quaternion);
+    model.scale.copy(scale);
+    model.updateMatrix();
   }
 
   resetWorkspace() {
@@ -748,18 +860,19 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.pollHandle = null;
     }
     this.currentJobId = null;
-    this.currentAssetRecord = null;
+    this.clearAssetInstances();
+    this.activeAssetId = null;
     this.lastScreenshotDataUrl = '';
     this.previewImage.load('');
-    if (this.activeModelViewer) {
-      this.remove(this.activeModelViewer);
-      this.activeModelViewer = null;
-    }
+    this.workspaceState = this.createEmptyWorkspaceState();
+    this.workspaceState.assets = [];
     if (this.promptKeyboard) {
       this.promptKeyboard.setText(this.currentPrompt);
       this.hidePromptEditor('Workspace reset.');
     }
     this.updateMicDiagnostics();
+    this.refreshPromptText();
     this.setStatus('Workspace reset.');
   }
 }
+
