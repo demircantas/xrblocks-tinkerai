@@ -395,6 +395,72 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus('Screenshot preview cleared.');
     };
 
+    const catalogHeaderRow = grid.addRow({weight: 0.05});
+    catalogHeaderRow.addText({
+      text: 'Asset Catalog',
+      fontSizeDp: 16,
+      fontColor: '#9ca3af',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    this.catalogText = grid.addRow({weight: 0.1}).addText({
+      text: 'Catalog: loading...',
+      fontSizeDp: 14,
+      fontColor: '#cbd5e1',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+    });
+
+    const catalogButtonsRow = grid.addRow({weight: 0.11});
+    this.catalogPrevButton = catalogButtonsRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Prev',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.8,
+      height: 0.56,
+    });
+    this.catalogPrevButton.onTriggered = () => this.stepCatalog(-1);
+
+    this.catalogNextButton = catalogButtonsRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Next',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.8,
+      height: 0.56,
+    });
+    this.catalogNextButton.onTriggered = () => this.stepCatalog(1);
+
+    this.catalogRefreshButton = catalogButtonsRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Refresh',
+      backgroundColor: '#1d4ed8',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.8,
+      height: 0.56,
+    });
+    this.catalogRefreshButton.onTriggered = () => this.refreshAssetCatalog();
+
+    this.catalogLoadButton = catalogButtonsRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Load Asset',
+      backgroundColor: '#7c3aed',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.8,
+      height: 0.56,
+    });
+    this.catalogLoadButton.onTriggered = () => this.loadCatalogAsset();
+
     grid.addRow({weight: 0.1}).addText({
       text:
         'Version: ' + SAMPLE_VERSION + '\n' +
@@ -875,6 +941,110 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateSelectionUi();
     this.setStatus(`Selection reset for ${this.activeAssetId}. Whole asset is implicitly kept again.`);
   }
+  refreshCatalogUi() {
+    if (!this.catalogText) {
+      return;
+    }
+
+    if (!this.catalogItems.length) {
+      this.catalogText.text = 'Catalog: no assets loaded yet. Press Refresh to fetch backend assets.';
+      return;
+    }
+
+    const index = Math.max(0, Math.min(this.catalogIndex, this.catalogItems.length - 1));
+    const item = this.catalogItems[index];
+    const prompt = item?.metadata?.prompt || item?.assetId || 'Unnamed asset';
+    const source = item?.sourceType || 'asset';
+    this.catalogText.text = `Catalog ${index + 1}/${this.catalogItems.length}: ${item.assetId}\n${prompt}\nSource: ${source}`;
+  }
+
+  async fetchAssetCatalogItems() {
+    if (this.apiClient.useBackend) {
+      const response = await fetch(`${this.apiClient.backendUrl}/assets`);
+      if (!response.ok) {
+        throw new Error(`Asset listing failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      return payload.items || [];
+    }
+
+    const raw = localStorage.getItem('xrblocks.sam3d_workspace.phase1');
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    const assets = parsed?.workspace?.assets || [];
+    return assets.map((asset, index) => ({
+      assetId: asset.assetId,
+      latentHandle: asset.latentHandle || asset.assetId,
+      glbUrl: asset.glbUrl,
+      thumbnailUrl: asset.thumbnailUrl || null,
+      savedAt: parsed.savedAt || Date.now(),
+      sourceType: 'workspace-local',
+      hasLatents: true,
+      metadata: {
+        prompt: asset.prompt || parsed?.workspace?.prompt || `Local asset ${index + 1}`,
+        workspaceId: parsed.workspaceId || this.apiClient.workspaceId,
+        jobId: null,
+      },
+    }));
+  }
+
+  async refreshAssetCatalog() {
+    this.setStatus('Refreshing asset catalog...');
+    try {
+      this.catalogItems = await this.fetchAssetCatalogItems();
+      this.catalogIndex = 0;
+      this.refreshCatalogUi();
+      this.setStatus(
+        this.catalogItems.length
+          ? `Loaded ${this.catalogItems.length} asset(s) into the catalog.`
+          : 'Asset catalog is empty.'
+      );
+    } catch (error) {
+      console.error('Failed to refresh asset catalog.', error);
+      this.catalogItems = [];
+      this.catalogIndex = 0;
+      this.refreshCatalogUi();
+      this.setStatus('Asset catalog refresh failed.');
+    }
+  }
+
+  stepCatalog(direction) {
+    if (!this.catalogItems.length) {
+      this.setStatus('No catalog items available yet.');
+      return;
+    }
+    const count = this.catalogItems.length;
+    this.catalogIndex = (this.catalogIndex + direction + count) % count;
+    this.refreshCatalogUi();
+  }
+
+  async loadCatalogAsset() {
+    if (!this.catalogItems.length) {
+      this.setStatus('No catalog asset is available to load.');
+      return;
+    }
+
+    const selected = this.catalogItems[this.catalogIndex];
+    const existingRecord = this.getAssetRecord(selected.assetId);
+    const assetRecord = {
+      assetId: selected.assetId,
+      latentHandle: selected.latentHandle || selected.assetId,
+      glbUrl: selected.glbUrl,
+      prompt: selected.metadata?.prompt || selected.assetId,
+      thumbnailUrl: selected.thumbnailUrl || '',
+      transformMatrix: normalizeTransformMatrix(existingRecord) || null,
+      selections: existingRecord?.selections || [],
+    };
+
+    await this.instantiateAssetRecord(assetRecord);
+    this.currentPrompt = assetRecord.prompt || this.currentPrompt;
+    this.workspaceState.prompt = this.currentPrompt;
+    this.refreshPromptText();
+    this.setStatus(`Loaded catalog asset ${assetRecord.assetId} into the workspace.`);
+  }
   async generateAsset() {
     if (!this.lastScreenshotDataUrl) {
       this.setStatus('Capture a screenshot before generating.');
@@ -1138,5 +1308,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     super.dispose();
   }
 }
+
 
 
