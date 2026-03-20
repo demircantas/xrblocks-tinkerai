@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import {TubePainter} from 'three/addons/misc/TubePainter.js';
 
 const DEFAULT_PROXIMITY = 0.03;
-const DEFAULT_BRUSH_RADIUS = 0.01;
-const DEFAULT_POINTER_SIZE = 0.012;
+// const DEFAULT_BRUSH_RADIUS = 0.035;
+const DEFAULT_BRUSH_RADIUS = 2.4;
+// const DEFAULT_POINTER_SIZE = 0.04;
+const DEFAULT_POINTER_SIZE = 1.0;
 const DEFAULT_STAMP_INTERVAL_MS = 70;
 const DEFAULT_SAMPLE_STEP_DISTANCE = 0.015;
 const MAX_STROKE_PAINTERS = 64;
+const STATUS_INTERVAL_MS = 120;
 
 export class MeshSelectionController {
   constructor({
@@ -42,7 +45,9 @@ export class MeshSelectionController {
     this.currentStrokePainter = null;
     this.lastStrokePoint = null;
     this.lastStampTimeMs = 0;
+    this.lastStatusTimeMs = 0;
     this.previewVisible = false;
+    this.selectionDirty = false;
 
     this._tmpRotation = new THREE.Matrix4();
     this._tmpScale = new THREE.Vector3();
@@ -86,6 +91,7 @@ export class MeshSelectionController {
     this.previewVisible = false;
     this.isPinching = false;
     this.activePinchSource = null;
+    this.selectionDirty = false;
   }
 
   findContentRoot(model) {
@@ -174,6 +180,7 @@ export class MeshSelectionController {
     this.clearSelectionPreview();
     this.clearDrawMarkers();
     this.previewVisible = false;
+    this.selectionDirty = true;
     this.emitSelectionChanged();
   }
 
@@ -203,6 +210,7 @@ export class MeshSelectionController {
     if (this.previewVisible) {
       this.renderSelectionPreview();
     }
+    this.selectionDirty = false;
     this.emitSelectionChanged();
   }
 
@@ -385,7 +393,7 @@ export class MeshSelectionController {
 
     if (changed > 0) {
       this.selectedVertexCount += changed;
-      this.emitSelectionChanged();
+      this.selectionDirty = true;
     }
     return changed;
   }
@@ -420,9 +428,10 @@ export class MeshSelectionController {
     }
 
     this.appendStrokePoint(this._tmpWorldPoint);
-    this.onStatus(
-      `Selecting vertices: ${this.selectedVertexCount} kept on ${this.activeAssetId || 'asset'}.`
-    );
+    if (this.selectionDirty && now - this.lastStatusTimeMs >= STATUS_INTERVAL_MS) {
+      this.onStatus(`Selecting vertices: ${this.selectedVertexCount} kept on ${this.activeAssetId || 'asset'}.`);
+      this.lastStatusTimeMs = now;
+    }
     this.lastStampTimeMs = now;
   }
 
@@ -447,6 +456,10 @@ export class MeshSelectionController {
       this.isPinching = false;
       this.activePinchSource = null;
       this.endStroke();
+      if (this.selectionDirty) {
+        this.selectionDirty = false;
+        this.emitSelectionChanged();
+      }
     }
   }
 
@@ -455,3 +468,5 @@ export class MeshSelectionController {
     this.sampleDrawFromSource(this.activePinchSource);
   }
 }
+
+
