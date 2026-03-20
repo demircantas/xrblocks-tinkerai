@@ -281,11 +281,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
     this.selectionModeButton.onTriggered = () => this.toggleSelectionMode();
 
+    this.paintModeButton = selectionRow
+      .addCol({weight: 1 / 3})
+      .addTextButton({
+        text: 'Mode: Drop',
+        backgroundColor: '#991b1b',
+        fontColor: '#ffffff',
+        fontSizeDp: 17,
+        opacity: 0.98,
+        width: 0.82,
+        height: 0.62,
+      });
+    this.paintModeButton.onTriggered = () => this.togglePaintMode();
+
     this.previewSelectionButton = selectionRow
       .addCol({weight: 1 / 3})
       .addTextButton({
-        text: 'Preview Sel',
-        backgroundColor: '#991b1b',
+        text: 'Preview',
+        backgroundColor: '#166534',
         fontColor: '#ffffff',
         fontSizeDp: 17,
         opacity: 0.98,
@@ -294,17 +307,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
     this.previewSelectionButton.onTriggered = () => this.previewSelection();
 
-    this.clearSelectionButton = selectionRow
-      .addCol({weight: 1 / 3})
-      .addTextButton({
-        text: 'Clear Sel',
-        backgroundColor: '#4b5563',
-        fontColor: '#ffffff',
-        fontSizeDp: 17,
-        opacity: 0.98,
-        width: 0.82,
-        height: 0.62,
-      });
+    const selectionActionsRow = grid.addRow({weight: 0.08});
+    this.clearSelectionButton = selectionActionsRow.addTextButton({
+      text: 'Reset To Full Keep',
+      backgroundColor: '#4b5563',
+      fontColor: '#ffffff',
+      fontSizeDp: 16,
+      opacity: 0.98,
+      width: 0.9,
+      height: 0.56,
+    });
     this.clearSelectionButton.onTriggered = () => this.clearSelection();
 
     const diagnosticsHeaderRow = grid.addRow({weight: 0.05});
@@ -509,12 +521,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   updateSelectionUi() {
-    if (!this.selectionModeButton || !this.previewSelectionButton || !this.clearSelectionButton) {
+    if (!this.selectionModeButton || !this.paintModeButton || !this.previewSelectionButton || !this.clearSelectionButton) {
       return;
     }
 
     const hasTarget = !!this.activeAssetId && !!this.assetInstances.get(this.activeAssetId);
-    const selectionCount = this.selectionController?.getSelectionCount() || 0;
+    const paintMode = this.selectionController?.getPaintMode?.() || 'discard';
 
     this.selectionModeButton.text = hasTarget
       ? this.isSelectionMode
@@ -523,21 +535,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
       : 'Select: N/A';
     this.selectionModeButton.backgroundColor = hasTarget
       ? this.isSelectionMode
-        ? '#dc2626'
+        ? '#0f766e'
         : '#374151'
       : '#1f2937';
 
-    this.previewSelectionButton.text = `Preview (${selectionCount})`;
-    this.previewSelectionButton.backgroundColor = hasTarget && selectionCount > 0
-      ? '#991b1b'
-      : '#1f2937';
+    this.paintModeButton.text = paintMode === 'keep' ? 'Mode: Keep' : 'Mode: Drop';
+    this.paintModeButton.backgroundColor = paintMode === 'keep' ? '#166534' : '#991b1b';
 
-    this.clearSelectionButton.text = selectionCount > 0 ? 'Clear Sel' : 'Clear (0)';
-    this.clearSelectionButton.backgroundColor = hasTarget && selectionCount > 0
-      ? '#4b5563'
-      : '#1f2937';
+    this.previewSelectionButton.text = 'Preview';
+    this.previewSelectionButton.backgroundColor = hasTarget ? '#166534' : '#1f2937';
+
+    this.clearSelectionButton.backgroundColor = hasTarget ? '#4b5563' : '#1f2937';
   }
-
   setStatus(text) {
     if (this.statusText) {
       this.statusText.text = text;
@@ -767,7 +776,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     if (selectedVertexCount === 0) {
-      this.setStatus(`Selection cleared for ${assetId}.`);
+      this.setStatus(`Selection reset for ${assetId}. Whole asset is implicitly kept again.`);
     }
   }
 
@@ -809,6 +818,21 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  togglePaintMode() {
+    if (!this.selectionController) {
+      return;
+    }
+    const nextMode = this.selectionController.getPaintMode() === 'keep'
+      ? 'discard'
+      : 'keep';
+    this.selectionController.setPaintMode(nextMode);
+    this.updateSelectionUi();
+    this.setStatus(
+      nextMode === 'keep'
+        ? 'Paint mode set to keep. Green sculpt strokes will preserve geometry.'
+        : 'Paint mode set to discard. Red sculpt strokes will remove geometry from the keep set.'
+    );
+  }
   toggleSelectionMode() {
     if (!this.activeAssetId || !this.assetInstances.get(this.activeAssetId)) {
       this.setStatus('Load or generate an asset before entering selection mode.');
@@ -821,7 +845,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateSelectionUi();
     this.setStatus(
       this.isSelectionMode
-        ? `Selection mode enabled for ${this.activeAssetId}. Pinch-drag over the mesh to keep vertices.`
+        ? `Selection mode enabled for ${this.activeAssetId}. Pinch-drag to ${this.selectionController.getPaintMode() === 'keep' ? 'keep' : 'discard'} geometry with the sculpt brush.`
         : 'Selection mode disabled. Object manipulation restored.'
     );
   }
@@ -835,10 +859,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const count = this.selectionController.renderSelectionPreview();
     this.updateSelectionUi();
     if (count === 0) {
-      this.setStatus('No selected vertices to preview yet.');
+      this.setStatus('No kept vertices to preview yet.');
       return;
     }
-    this.setStatus(`Previewing ${count} kept vertices in red.`);
+    this.setStatus(`Previewing ${count} kept vertices in green.`);
   }
 
   clearSelection() {
@@ -849,9 +873,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.selectionController.clearSelection();
     this.updateSelectionUi();
-    this.setStatus(`Selection cleared for ${this.activeAssetId}.`);
+    this.setStatus(`Selection reset for ${this.activeAssetId}. Whole asset is implicitly kept again.`);
   }
-
   async generateAsset() {
     if (!this.lastScreenshotDataUrl) {
       this.setStatus('Capture a screenshot before generating.');
@@ -1115,3 +1138,5 @@ export class Sam3dWorkspaceScene extends xb.Script {
     super.dispose();
   }
 }
+
+
