@@ -25,6 +25,11 @@ function matrixToArray(object3D) {
   return object3D.matrix.toArray();
 }
 
+function matrixWorldToArray(object3D) {
+  object3D.updateMatrixWorld(true);
+  return object3D.matrixWorld.toArray();
+}
+
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
@@ -1205,7 +1210,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         prompt: assetRecord.prompt,
         thumbnailUrl: assetRecord.thumbnailUrl,
         transformMatrix: model
-          ? matrixToArray(model)
+          ? this.getPersistedTransformMatrix(model, normalizeTransformMatrix(assetRecord))
           : normalizeTransformMatrix(assetRecord),
         selections: assetRecord.selections || [],
         viewMode: assetRecord.viewMode || 'full',
@@ -1800,12 +1805,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const transformMatrix = normalizeTransformMatrix(assetRecord);
     if (transformMatrix) {
-      this.applyTransformToModel(model, transformMatrix);
+      this.applyPersistedTransformToModel(model, transformMatrix);
     } else {
       const placement = this.getDefaultPlacementForIndex(this.workspaceState.assets.length);
       model.position.set(placement.x, placement.y, placement.z);
       model.updateMatrix();
-      assetRecord.transformMatrix = matrixToArray(model);
+      model.updateMatrixWorld(true);
+      assetRecord.transformMatrix = this.getPersistedTransformMatrix(
+        model,
+        matrixToArray(model)
+      );
     }
 
     this.assignSelectionNodePaths(model);
@@ -1813,7 +1822,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.assetInstances.set(assetRecord.assetId, model);
     this.upsertAssetRecord({
       ...assetRecord,
-      transformMatrix: normalizeTransformMatrix(assetRecord) || matrixToArray(model),
+      transformMatrix:
+        normalizeTransformMatrix(assetRecord) ||
+        this.getPersistedTransformMatrix(model, matrixToArray(model)),
       selections: assetRecord.selections || [],
       viewMode: assetRecord.viewMode || 'full',
     });
@@ -1838,7 +1849,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const existingRecord = this.getAssetRecord(asset.assetId);
     const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
     const model = await this.instantiateAssetRecord(assetRecord);
-    assetRecord.transformMatrix = matrixToArray(model);
+    assetRecord.transformMatrix = this.getPersistedTransformMatrix(
+      model,
+      matrixToArray(model)
+    );
     this.upsertAssetRecord(assetRecord);
     this.currentPrompt = assetRecord.prompt || this.currentPrompt;
     this.workspaceState.prompt = this.currentPrompt;
@@ -1846,6 +1860,52 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus(
       `${sourceLabel} asset loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
     );
+  }
+
+  getPersistedTransformMatrix(model, fallbackMatrix = null) {
+    if (!model) {
+      return fallbackMatrix;
+    }
+
+    const contentRoot = this.findModelContentRoot(model);
+    if (!contentRoot || contentRoot === model) {
+      return fallbackMatrix || matrixToArray(model);
+    }
+
+    return matrixWorldToArray(contentRoot);
+  }
+
+  applyPersistedTransformToModel(model, transformArray) {
+    if (!model || !transformArray) return;
+
+    const contentRoot = this.findModelContentRoot(model);
+    if (!contentRoot || contentRoot === model) {
+      this.applyTransformToModel(model, transformArray);
+      return;
+    }
+
+    model.updateMatrixWorld(true);
+    contentRoot.updateMatrixWorld(true);
+
+    const desiredContentWorld = new THREE.Matrix4().fromArray(transformArray);
+    const contentLocal = contentRoot.matrix.clone();
+    const desiredWrapperWorld = desiredContentWorld
+      .clone()
+      .multiply(contentLocal.invert());
+    const parentWorldInverse = model.parent
+      ? model.parent.matrixWorld.clone().invert()
+      : new THREE.Matrix4();
+    const desiredWrapperLocal = parentWorldInverse.multiply(desiredWrapperWorld);
+
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    desiredWrapperLocal.decompose(position, quaternion, scale);
+    model.position.copy(position);
+    model.quaternion.copy(quaternion);
+    model.scale.copy(scale);
+    model.updateMatrix();
+    model.updateMatrixWorld(true);
   }
 
   splitAssetUrl(url) {
