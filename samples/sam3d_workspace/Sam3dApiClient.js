@@ -148,6 +148,58 @@ export class Sam3dApiClient {
     };
   }
 
+  async createComposeJob({sessionId, workspaceId, compose = {}}) {
+    if (this.useBackend) {
+      const response = await fetch(
+        `${this.backendUrl}/workspaces/${workspaceId}/compose`,
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            sessionId,
+            compose,
+          }),
+        }
+      );
+      return await response.json();
+    }
+
+    const jobId = `job-${crypto.randomUUID()}`;
+    const assetId = `asset-${crypto.randomUUID()}`;
+    const latentHandle = `latent-${crypto.randomUUID()}`;
+
+    this.jobs.set(jobId, {
+      status: 'queued',
+      progress: 0,
+      result: {
+        jobId,
+        status: 'completed',
+        sessionId,
+        workspaceId,
+        asset: {
+          assetId,
+          glbUrl: this.mockModelUrl,
+          thumbnailUrl: '',
+          latentHandle,
+          sourceType: 'composed',
+          metadata: {
+            workspaceId,
+            sourceAssetIds: [],
+          },
+        },
+      },
+    });
+
+    this.runMockJob(jobId);
+
+    return {
+      jobId,
+      status: 'queued',
+      sessionId,
+      workspaceId,
+    };
+  }
+
   async saveWorkspace(workspace) {
     if (this.useBackend) {
       const response = await fetch(

@@ -590,6 +590,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
     this.workspaceCatalogDeleteButton.onTriggered = () => this.deleteSelectedWorkspaceCatalogItem();
 
+    const workspaceButtonsCompose = libraryGrid.addRow({weight: 0.14});
+    this.workspaceComposeButton = workspaceButtonsCompose.addCol({weight: 1}).addTextButton({
+      text: 'Compose WS',
+      backgroundColor: '#7c3aed',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.9,
+      height: 0.58,
+    });
+    this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();
+
     this.libraryPanel.updateLayouts();
   }
 
@@ -1569,6 +1581,51 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshWorkspaceCatalogUi();
   }
 
+  async composeSelectedWorkspaceCatalogItem() {
+    if (!this.workspaceCatalogItems.length) {
+      this.setStatus('No workspace catalog item is available to compose.');
+      return;
+    }
+
+    if (this.currentJobId) {
+      this.setStatus('Another backend job is already running.');
+      return;
+    }
+
+    const selected = this.workspaceCatalogItems[this.workspaceCatalogIndex];
+    if (!selected?.workspaceId) {
+      this.setStatus('Selected workspace entry is missing a workspaceId.');
+      return;
+    }
+
+    try {
+      const workspaceId = selected.workspaceId;
+      const job = await this.apiClient.createComposeJob({
+        sessionId: this.sessionId,
+        workspaceId,
+        compose: {
+          normalizeToDecoderGrid: false,
+        },
+      });
+
+      this.currentJobId = job.jobId;
+      this.setStatus(`Compose job queued for ${workspaceId}: ${job.jobId}`);
+      this.startPollingJob(job.jobId, {
+        jobLabel: 'Compose',
+        onCompleted: async (update) => {
+          await this.loadGeneratedAsset(update.asset, 'Composed');
+          this.refreshAssetCatalog().catch((error) => {
+            console.warn('Failed to refresh asset catalog after compose.', error);
+          });
+        },
+        failedMessage: 'Compose failed.',
+      });
+    } catch (error) {
+      console.error('Failed to start compose job.', error);
+      this.setStatus('Compose request failed.');
+    }
+  }
+
   async deleteSelectedWorkspaceCatalogItem() {
     if (!this.workspaceCatalogItems.length) {
       this.setStatus('No workspace catalog item is available to delete.');
@@ -1622,7 +1679,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     if (this.currentJobId) {
-      this.setStatus('A generation job is already running.');
+      this.setStatus('Another backend job is already running.');
       return;
     }
 
@@ -1633,11 +1690,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.currentJobId = job.jobId;
-    this.setStatus(`Job queued: ${job.jobId}`);
-    this.startPollingJob(job.jobId);
+    this.setStatus(`Generation job queued: ${job.jobId}`);
+    this.startPollingJob(job.jobId, {
+      jobLabel: 'Generation',
+      onCompleted: async (update) => {
+        await this.loadGeneratedAsset(update.asset, 'Generated');
+      },
+      failedMessage: 'Generation failed.',
+    });
   }
 
-  startPollingJob(jobId) {
+  startPollingJob(jobId, {jobLabel = 'Job', onCompleted, failedMessage = 'Job failed.'} = {}) {
     if (this.pollHandle) {
       clearInterval(this.pollHandle);
     }
@@ -1649,7 +1712,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
           ? `${Math.round(update.progress * 100)}%`
           : 'starting';
         this.setStatus(
-          `Generation ${update.status}: ${progress}${
+          `${jobLabel} ${update.status}: ${progress}${
             update.message ? ` - ${update.message}` : ''
           }`
         );
@@ -1661,11 +1724,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.currentJobId = null;
 
       if (update.status === 'failed') {
-        this.setStatus(update.error || 'Generation failed.');
+        this.setStatus(update.error || failedMessage);
         return;
       }
 
-      await this.loadGeneratedAsset(update.asset);
+      await onCompleted?.(update);
     }, POLL_INTERVAL_MS);
   }
 
@@ -1723,7 +1786,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return model;
   }
 
-  async loadGeneratedAsset(asset) {
+  async loadGeneratedAsset(asset, sourceLabel = 'Generated') {
     const existingRecord = this.getAssetRecord(asset.assetId);
     const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
     const model = await this.instantiateAssetRecord(assetRecord);
@@ -1733,7 +1796,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.workspaceState.prompt = this.currentPrompt;
     this.refreshPromptText();
     this.setStatus(
-      `Generated asset loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
+      `${sourceLabel} asset loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
     );
   }
 
