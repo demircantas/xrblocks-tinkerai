@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   options.sound.speechRecognizer.playSimulatorActivationSounds = true;
   options.reticles.enabled = true;
   options.xrButton.showEnterSimulatorButton = true;
+  options.enableCamera('environment');
   options.setAppTitle('SAM3D Workspace');
   options.setAppDescription(
     'Workspace refactor for screenshot capture, prompt input, backend generation, and multi-asset placement.'

@@ -53,6 +53,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
     this.pollHandle = null;
+    this.pollGeneration = 0;
     this.isRecordingPrompt = false;
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
@@ -813,6 +814,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
       let image = '';
       if (USE_DESKTOP_GEMINI_CAPTURE) {
         image = await loadImageAsDataUrl(DESKTOP_GEMINI_CAPTURE_URL);
+      } else if (xb.core.deviceCamera?.loaded) {
+        const snapshot = await xb.core.deviceCamera.getSnapshot({
+          outputFormat: 'base64',
+        });
+        if (!snapshot) {
+          throw new Error('Device camera snapshot returned no data.');
+        }
+        image = snapshot;
       } else {
         const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
         image = await xb.core.screenshotSynthesizer.getScreenshot(useCameraOverlay);
@@ -824,9 +833,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus(
         USE_DESKTOP_GEMINI_CAPTURE
           ? 'Loaded test capture from assets/desktop_gemini.png.'
-          : OVERLAY_ON_CAMERA && !!xb.core.deviceCamera
-            ? 'Camera-overlay screenshot captured.'
-            : 'Scene screenshot captured.'
+          : xb.core.deviceCamera?.loaded
+            ? 'Device camera snapshot captured.'
+            : OVERLAY_ON_CAMERA && !!xb.core.deviceCamera
+              ? 'Camera-overlay screenshot captured.'
+              : 'Scene screenshot captured.'
       );
     } catch (error) {
       console.error('Failed to capture screenshot.', error);
@@ -911,10 +922,22 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   removeAssetInstance(assetId) {
     this.disposeDerivedAssetView(assetId);
-    const model = this.assetInstances.get(assetId);
-    if (!model) return;
-    this.remove(model);
-    this.assetInstances.delete(assetId);
+
+    const trackedModel = this.assetInstances.get(assetId);
+    if (trackedModel) {
+      trackedModel.parent?.remove(trackedModel);
+      trackedModel.dispose?.();
+      this.assetInstances.delete(assetId);
+    }
+
+    const orphanedModels = this.children.filter(
+      (child) => child?.userData?.assetId === assetId
+    );
+    for (const model of orphanedModels) {
+      model.parent?.remove(model);
+      model.dispose?.();
+    }
+
     if (this.activeAssetId === assetId) {
       this.activeAssetId = null;
     }
@@ -1702,34 +1725,58 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   startPollingJob(jobId, {jobLabel = 'Job', onCompleted, failedMessage = 'Job failed.'} = {}) {
     if (this.pollHandle) {
-      clearInterval(this.pollHandle);
+      clearTimeout(this.pollHandle);
+      this.pollHandle = null;
     }
 
-    this.pollHandle = setInterval(async () => {
-      const update = await this.apiClient.getJob(jobId);
-      if (update.status === 'running' || update.status === 'queued') {
-        const progress = update.progress
-          ? `${Math.round(update.progress * 100)}%`
-          : 'starting';
-        this.setStatus(
-          `${jobLabel} ${update.status}: ${progress}${
-            update.message ? ` - ${update.message}` : ''
-          }`
-        );
+    const pollGeneration = ++this.pollGeneration;
+
+    const pollOnce = async () => {
+      if (pollGeneration !== this.pollGeneration) {
         return;
       }
 
-      clearInterval(this.pollHandle);
-      this.pollHandle = null;
-      this.currentJobId = null;
+      try {
+        const update = await this.apiClient.getJob(jobId);
+        if (pollGeneration !== this.pollGeneration) {
+          return;
+        }
 
-      if (update.status === 'failed') {
-        this.setStatus(update.error || failedMessage);
-        return;
+        if (update.status === 'running' || update.status === 'queued') {
+          const progress = update.progress
+            ? `${Math.round(update.progress * 100)}%`
+            : 'starting';
+          this.setStatus(
+            `${jobLabel} ${update.status}: ${progress}${
+              update.message ? ` - ${update.message}` : ''
+            }`
+          );
+          this.pollHandle = setTimeout(pollOnce, POLL_INTERVAL_MS);
+          return;
+        }
+
+        this.pollHandle = null;
+        this.currentJobId = null;
+
+        if (update.status === 'failed') {
+          this.setStatus(update.error || failedMessage);
+          return;
+        }
+
+        this.pollGeneration++;
+        await onCompleted?.(update);
+      } catch (error) {
+        if (pollGeneration !== this.pollGeneration) {
+          return;
+        }
+        this.pollHandle = null;
+        this.currentJobId = null;
+        console.error(`${jobLabel} polling failed.`, error);
+        this.setStatus(`${jobLabel} polling failed.`);
       }
+    };
 
-      await onCompleted?.(update);
-    }, POLL_INTERVAL_MS);
+    this.pollHandle = setTimeout(pollOnce, POLL_INTERVAL_MS);
   }
 
   async instantiateAssetRecord(assetRecord, {setActive = true} = {}) {
@@ -1738,6 +1785,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.removeAssetInstance(assetRecord.assetId);
 
     const model = new xb.ModelViewer({});
+    model.userData.assetId = assetRecord.assetId;
     this.add(model);
 
     const {path, model: modelName} = this.splitAssetUrl(assetRecord.glbUrl);
@@ -1913,10 +1961,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   resetWorkspace() {
     if (this.pollHandle) {
-      clearInterval(this.pollHandle);
+      clearTimeout(this.pollHandle);
       this.pollHandle = null;
     }
     this.currentJobId = null;
+    this.pollGeneration++;
     this.clearAssetInstances();
     this.activeAssetId = null;
     this.isSelectionMode = false;
@@ -1953,9 +2002,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   dispose() {
     if (this.pollHandle) {
-      clearInterval(this.pollHandle);
+      clearTimeout(this.pollHandle);
       this.pollHandle = null;
     }
+    this.pollGeneration++;
     this.selectionController?.dispose();
     this.selectionController = null;
     this.clearAssetInstances();
