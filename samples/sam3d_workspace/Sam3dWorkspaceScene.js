@@ -57,6 +57,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
     this.assetInstances = new Map();
+    this.assetDerivedViews = new Map();
     this.activeAssetId = null;
     this.selectionController = null;
     this.isSelectionMode = false;
@@ -308,16 +309,27 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.previewSelectionButton.onTriggered = () => this.previewSelection();
 
     const selectionActionsRow = grid.addRow({weight: 0.08});
-    this.clearSelectionButton = selectionActionsRow.addTextButton({
+    this.clearSelectionButton = selectionActionsRow.addCol({weight: 0.5}).addTextButton({
       text: 'Reset To Full Keep',
       backgroundColor: '#4b5563',
       fontColor: '#ffffff',
       fontSizeDp: 16,
       opacity: 0.98,
-      width: 0.9,
+      width: 0.88,
       height: 0.56,
     });
     this.clearSelectionButton.onTriggered = () => this.clearSelection();
+
+    this.toggleKeptOnlyButton = selectionActionsRow.addCol({weight: 0.5}).addTextButton({
+      text: 'View: Full',
+      backgroundColor: '#1d4ed8',
+      fontColor: '#ffffff',
+      fontSizeDp: 16,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.56,
+    });
+    this.toggleKeptOnlyButton.onTriggered = () => this.toggleActiveAssetViewMode();
 
     const diagnosticsHeaderRow = grid.addRow({weight: 0.05});
     diagnosticsHeaderRow.addText({
@@ -593,6 +605,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const hasTarget = !!this.activeAssetId && !!this.assetInstances.get(this.activeAssetId);
     const paintMode = this.selectionController?.getPaintMode?.() || 'discard';
+    const activeAssetRecord = this.activeAssetId
+      ? this.getAssetRecord(this.activeAssetId)
+      : null;
+    const viewMode = activeAssetRecord?.viewMode || 'full';
 
     this.selectionModeButton.text = hasTarget
       ? this.isSelectionMode
@@ -612,7 +628,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.previewSelectionButton.backgroundColor = hasTarget ? '#166534' : '#1f2937';
 
     this.clearSelectionButton.backgroundColor = hasTarget ? '#4b5563' : '#1f2937';
+    if (this.toggleKeptOnlyButton) {
+      this.toggleKeptOnlyButton.text = viewMode === 'kept-only'
+        ? 'View: Kept'
+        : 'View: Full';
+      this.toggleKeptOnlyButton.backgroundColor = hasTarget
+        ? viewMode === 'kept-only'
+          ? '#0369a1'
+          : '#1d4ed8'
+        : '#1f2937';
+    }
   }
+
   setStatus(text) {
     if (this.statusText) {
       this.statusText.text = text;
@@ -767,6 +794,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   removeAssetInstance(assetId) {
+    this.disposeDerivedAssetView(assetId);
     const model = this.assetInstances.get(assetId);
     if (!model) return;
     this.remove(model);
@@ -800,7 +828,232 @@ export class Sam3dWorkspaceScene extends xb.Script {
       thumbnailUrl: asset.thumbnailUrl || this.lastScreenshotDataUrl,
       transformMatrix: normalizeTransformMatrix(existingRecord) || null,
       selections: existingRecord?.selections || [],
+      viewMode: existingRecord?.viewMode || 'full',
     };
+  }
+
+  findModelContentRoot(model) {
+    if (!model) return null;
+    return (
+      model.children.find((child) => child.type === 'Group' || child.type === 'Scene') ||
+      model
+    );
+  }
+
+  assignSelectionNodePaths(model) {
+    const contentRoot = this.findModelContentRoot(model);
+    if (!contentRoot) return;
+
+    const counters = new Map();
+    contentRoot.traverse((node) => {
+      if (!node.isMesh || !node.geometry?.attributes?.position) return;
+      node.userData.selectionNodePath = this.createSelectionNodePath(node, counters, contentRoot);
+    });
+  }
+
+  createSelectionNodePath(node, counters, contentRoot) {
+    const pathParts = [];
+    let current = node;
+    while (current && current !== contentRoot) {
+      const baseName = current.name?.trim() || current.type || 'node';
+      const key = `${current.parent?.uuid || 'root'}:${baseName}`;
+      const seen = counters.get(key) || 0;
+      counters.set(key, seen + 1);
+      pathParts.push(`${baseName}_${seen}`);
+      current = current.parent;
+    }
+    return `/${pathParts.reverse().join('/')}`;
+  }
+
+  toggleActiveAssetViewMode() {
+    if (!this.activeAssetId) {
+      this.setStatus('Load or generate an asset before changing the view mode.');
+      return;
+    }
+
+    const assetRecord = this.getAssetRecord(this.activeAssetId);
+    if (!assetRecord) {
+      this.setStatus('Active asset record is missing.');
+      return;
+    }
+
+    const nextMode = assetRecord.viewMode === 'kept-only' ? 'full' : 'kept-only';
+    this.setAssetViewMode(this.activeAssetId, nextMode);
+    this.setStatus(
+      nextMode === 'kept-only'
+        ? `Kept-only preview enabled for ${this.activeAssetId}.`
+        : `Full mesh view restored for ${this.activeAssetId}.`
+    );
+  }
+
+  setAssetViewMode(assetId, viewMode) {
+    const assetRecord = this.getAssetRecord(assetId);
+    if (!assetRecord) return;
+
+    const normalizedMode = viewMode === 'kept-only' ? 'kept-only' : 'full';
+    this.upsertAssetRecord({
+      ...assetRecord,
+      viewMode: normalizedMode,
+    });
+
+    if (normalizedMode === 'kept-only') {
+      this.rebuildKeptOnlyView(assetId);
+    }
+    this.applyAssetViewMode(assetId);
+  }
+
+  applyAssetViewMode(assetId) {
+    const model = this.assetInstances.get(assetId);
+    const assetRecord = this.getAssetRecord(assetId);
+    if (!model || !assetRecord) return;
+
+    const showKeptOnly = assetRecord.viewMode === 'kept-only' && (assetRecord.selections?.length || 0) > 0;
+    model.traverse((node) => {
+      if (!node.isMesh) return;
+      if (node.userData?.isDerivedKeptOnly) return;
+      node.visible = !showKeptOnly;
+    });
+
+    const derivedGroup = this.assetDerivedViews.get(assetId);
+    if (derivedGroup) {
+      derivedGroup.visible = showKeptOnly;
+    }
+
+    this.updateSelectionUi();
+  }
+
+  disposeDerivedAssetView(assetId) {
+    const derivedGroup = this.assetDerivedViews.get(assetId);
+    if (!derivedGroup) return;
+
+    derivedGroup.traverse((node) => {
+      if (node.userData?.ownsDerivedGeometry) {
+        node.geometry?.dispose?.();
+      }
+      if (node.userData?.ownsDerivedMaterial) {
+        if (Array.isArray(node.material)) {
+          node.material.forEach((material) => material?.dispose?.());
+        } else {
+          node.material?.dispose?.();
+        }
+      }
+    });
+    derivedGroup.parent?.remove(derivedGroup);
+    this.assetDerivedViews.delete(assetId);
+  }
+
+  rebuildKeptOnlyView(assetId) {
+    const model = this.assetInstances.get(assetId);
+    const assetRecord = this.getAssetRecord(assetId);
+    if (!model || !assetRecord) return;
+
+    this.disposeDerivedAssetView(assetId);
+    if (!assetRecord.selections?.length) {
+      return;
+    }
+
+    const selectionsByNodePath = new Map();
+    for (const selection of assetRecord.selections || []) {
+      selectionsByNodePath.set(selection.nodePath, new Set(selection.vertexIndices || []));
+    }
+
+    const derivedGroup = new THREE.Group();
+    derivedGroup.name = `${assetId}-kept-only-view`;
+    const modelInverseWorld = new THREE.Matrix4().copy(model.matrixWorld).invert();
+
+    model.traverse((node) => {
+      if (!node.isMesh || !node.geometry?.attributes?.position) return;
+      const keepSet = selectionsByNodePath.get(node.userData?.selectionNodePath);
+      if (!keepSet || keepSet.size === 0) return;
+
+      const derivedGeometry = this.createKeptOnlyGeometry(node.geometry, keepSet);
+      if (!derivedGeometry) return;
+
+      const derivedMaterial = this.cloneDerivedMaterial(node.material);
+      const derivedMesh = new THREE.Mesh(derivedGeometry, derivedMaterial);
+      derivedMesh.userData.isDerivedKeptOnly = true;
+      derivedMesh.userData.ownsDerivedGeometry = true;
+      derivedMesh.userData.ownsDerivedMaterial = true;
+      derivedMesh.matrixAutoUpdate = false;
+      derivedMesh.matrix.copy(modelInverseWorld).multiply(node.matrixWorld);
+      derivedMesh.matrix.decompose(derivedMesh.position, derivedMesh.quaternion, derivedMesh.scale);
+      derivedMesh.updateMatrix();
+      derivedGroup.add(derivedMesh);
+    });
+
+    if (derivedGroup.children.length === 0) {
+      return;
+    }
+
+    model.add(derivedGroup);
+    this.assetDerivedViews.set(assetId, derivedGroup);
+  }
+
+  cloneDerivedMaterial(material) {
+    if (Array.isArray(material)) {
+      return material.map((entry) => this.cloneDerivedMaterial(entry));
+    }
+
+    const clone = material?.clone?.() || new THREE.MeshStandardMaterial();
+    clone.side = THREE.DoubleSide;
+    return clone;
+  }
+
+  createKeptOnlyGeometry(geometry, keepSet) {
+    const positionAttr = geometry.getAttribute('position');
+    if (!positionAttr) return null;
+
+    if (geometry.index) {
+      const sourceIndex = geometry.index.array;
+      const keptIndices = [];
+      for (let i = 0; i < sourceIndex.length; i += 3) {
+        const a = sourceIndex[i];
+        const b = sourceIndex[i + 1];
+        const c = sourceIndex[i + 2];
+        if (keepSet.has(a) && keepSet.has(b) && keepSet.has(c)) {
+          keptIndices.push(a, b, c);
+        }
+      }
+
+      if (!keptIndices.length) {
+        return null;
+      }
+
+      const derivedGeometry = geometry.clone();
+      derivedGeometry.setIndex(keptIndices);
+      derivedGeometry.computeVertexNormals();
+      derivedGeometry.computeBoundingBox();
+      derivedGeometry.computeBoundingSphere();
+      return derivedGeometry;
+    }
+
+    const keptVertexTriples = [];
+    const stride = positionAttr.itemSize || 3;
+    const source = positionAttr.array;
+    for (let i = 0; i < positionAttr.count; i += 3) {
+      const a = i;
+      const b = i + 1;
+      const c = i + 2;
+      if (!keepSet.has(a) || !keepSet.has(b) || !keepSet.has(c)) {
+        continue;
+      }
+
+      for (const vertexIndex of [a, b, c]) {
+        const base = vertexIndex * stride;
+        keptVertexTriples.push(source[base], source[base + 1], source[base + 2]);
+      }
+    }
+
+    if (!keptVertexTriples.length) {
+      return null;
+    }
+
+    const derivedGeometry = new THREE.BufferGeometry();
+    derivedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(keptVertexTriples, 3));
+    derivedGeometry.computeVertexNormals();
+    derivedGeometry.computeBoundingBox();
+    derivedGeometry.computeBoundingSphere();
+    return derivedGeometry;
   }
 
   buildWorkspaceSnapshot() {
@@ -816,6 +1069,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
           ? matrixToArray(model)
           : normalizeTransformMatrix(assetRecord),
         selections: assetRecord.selections || [],
+        viewMode: assetRecord.viewMode || 'full',
       };
     });
 
@@ -840,6 +1094,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       ...assetRecord,
       selections,
     });
+
+    if ((assetRecord.viewMode || 'full') === 'kept-only') {
+      this.rebuildKeptOnlyView(assetId);
+      this.applyAssetViewMode(assetId);
+    }
 
     if (selectedVertexCount === 0) {
       this.setStatus(`Selection reset for ${assetId}. Whole asset is implicitly kept again.`);
@@ -903,6 +1162,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!this.activeAssetId || !this.assetInstances.get(this.activeAssetId)) {
       this.setStatus('Load or generate an asset before entering selection mode.');
       return;
+    }
+
+    const activeAssetRecord = this.getAssetRecord(this.activeAssetId);
+    if (!this.isSelectionMode && activeAssetRecord?.viewMode === 'kept-only') {
+      this.setAssetViewMode(this.activeAssetId, 'full');
     }
 
     this.isSelectionMode = !this.isSelectionMode;
@@ -1132,16 +1396,25 @@ export class Sam3dWorkspaceScene extends xb.Script {
       assetRecord.transformMatrix = matrixToArray(model);
     }
 
+    this.assignSelectionNodePaths(model);
+
     this.assetInstances.set(assetRecord.assetId, model);
     this.upsertAssetRecord({
       ...assetRecord,
       transformMatrix: normalizeTransformMatrix(assetRecord) || matrixToArray(model),
       selections: assetRecord.selections || [],
+      viewMode: assetRecord.viewMode || 'full',
     });
+
+    if ((assetRecord.viewMode || 'full') === 'kept-only') {
+      this.rebuildKeptOnlyView(assetRecord.assetId);
+    }
 
     if (setActive) {
       this.setActiveAsset(assetRecord.assetId);
+      this.applyAssetViewMode(assetRecord.assetId);
     } else {
+      this.applyAssetViewMode(assetRecord.assetId);
       this.applyWorkspaceInteractionPolicy();
       this.updateSelectionUi();
     }
@@ -1226,6 +1499,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         thumbnailUrl: savedAsset.thumbnailUrl,
         transformMatrix: normalizeTransformMatrix(savedAsset),
         selections: savedAsset.selections || [],
+        viewMode: savedAsset.viewMode || 'full',
       };
       await this.instantiateAssetRecord(normalizedRecord, {setActive: false});
     }
