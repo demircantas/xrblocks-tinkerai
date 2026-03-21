@@ -78,6 +78,17 @@ Each generated or composed object should be represented by an asset record with 
 
 `latentHandle` is the backend key used to retrieve the latent field for later composition. Initially, `assetId` and `latentHandle` may be the same underlying identifier.
 
+Important current convention:
+
+- `transformMatrix` is not authored directly on the raw GLB mesh coordinates.
+- In the current XR Blocks sample, the saved transform is authored on the frontend `ModelViewer` wrapper object after the loader has already applied its own internal content layout.
+- That internal content layout currently includes:
+  - a uniform scale of `0.9`
+  - horizontal recentering of the loaded GLB content
+  - vertical grounding so the object sits on the local floor plane
+- Because of that, backend compose must interpret the saved `transformMatrix` in the same normalized local frame the frontend shows to the user, not in raw GLB local coordinates.
+- This is currently a deliberate compatibility assumption between frontend viewing and backend compose. If the frontend viewing/layout behavior changes, backend compose behavior must be updated accordingly.
+
 ### Canonical selection record
 
 The frontend should store mesh-based selection state, not latent state.
@@ -436,14 +447,14 @@ Routes:
 There are now two compose entry points:
 
 - low-level compose: caller sends `assets[]` directly to `POST /compose`
-- high-level compose: caller selects a saved workspace entry, then calls `POST /workspaces/{workspaceId}/compose`
+- high-level compose: caller saves the current workspace, then calls `POST /workspaces/{workspaceId}/compose`
 
 The intended frontend flow is the high-level one:
 
-1. select a saved workspace from the workspace catalog
+1. save the current workspace snapshot
 2. call `POST /workspaces/{workspaceId}/compose`
 3. poll `GET /jobs/{jobId}`
-4. load the returned composed asset into the live scene
+4. load the returned composed asset
 
 ### Low-level compose request
 
@@ -493,7 +504,7 @@ Suggested shape:
 
 ### High-level workspace compose request
 
-This is the preferred product-facing route because it uses the selected saved workspace as the source of truth for assets, transforms, and selections.
+This is the preferred product-facing route because it uses the saved workspace as the source of truth for assets, transforms, and selections.
 
 ```json
 {
@@ -511,12 +522,6 @@ POST /workspaces/{workspaceId}/compose
 ```
 
 The backend then loads `workspace.assets[]` from the saved workspace and reuses the same compose pipeline as the low-level route.
-
-Current frontend expectation:
-
-- the compose action runs on the currently selected workspace entry in the workspace catalog
-- the frontend does not upload the in-memory scene directly when using the high-level compose route
-- if the user wants the latest in-memory scene to be the compose source of truth, they should snapshot it first and then compose that saved workspace entry
 
 ### Compose behavior
 
@@ -567,9 +572,15 @@ The current backend implementation does the following:
 
 - interprets `transformMatrix` using Three.js-compatible column-major order
 - loads the persisted source mesh saved when the asset was originally generated or composed
-- treats `selections[].vertexIndices` as kept vertices on that persisted source mesh
+- applies the same frontend `ModelViewer` content-layout convention to that persisted source mesh before compose:
+  - scale `0.9`
+  - horizontal recentering
+  - vertical grounding
+- converts latent voxel coordinates into the same export/world coordinate system used by the persisted GLB before applying frontend transforms
+- aligns the latent voxel cloud to that frontend-visible source mesh frame
+- treats `selections[].vertexIndices` as kept vertices on that frontend-visible source mesh
 - propagates kept mesh vertices to source voxels using `proximity`
-- applies the submitted transform matrix to both the kept mesh region and the kept source voxels
+- applies the submitted transform matrix to both the kept mesh region and the kept source voxels in that shared export/world space
 - stacks the transformed kept meshes, voxelizes the composed surface into decoder grid space, and assigns each composed voxel the nearest transformed latent feature vector
 - decodes only the final composed latent field and stores a new composed asset, including composed latents in `handoff/sample.npz`
 
@@ -578,6 +589,7 @@ Current limitations of this first pass:
 - `nodePath` is accepted but not yet used to target submeshes separately
 - end-to-end XR frontend testing has not happened yet
 - selection quality still depends on how well the frontend vertex indices correspond to the persisted source mesh topology used by the backend
+- backend compose currently depends on the XR Blocks `ModelViewer` content-layout convention remaining stable
 
 ## Selection Semantics
 
@@ -642,7 +654,7 @@ The next backend and frontend work should be:
 1. Keep the current asset and workspace catalog routes stable while the frontend/backend integration is still moving quickly.
 2. Keep workspace snapshots centered on frontend editing state, not latent upload.
 3. Keep the non-destructive kept-only visualization mode aligned with saved mesh selections.
-4. Validate the new `POST /workspaces/{workspaceId}/compose` flow end to end from the frontend using the selected saved workspace from the workspace catalog.
+4. Validate the new `POST /workspaces/{workspaceId}/compose` flow end to end from the frontend after workspace save.
 5. Keep the lower-level `POST /compose` route available as a debugging and integration primitive.
 6. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
 7. Begin separating the debug UI from the eventual user-study UI so embodied interaction and speech-first flows can evolve without destabilizing backend testing tools.
@@ -659,7 +671,7 @@ The agreed strategy is:
 - treat workspace save as snapshot creation in the current debug UI
 - support deleting saved workspaces and deleting saved assets, with backend safeguards preventing deletion of assets still referenced by saved workspaces
 - provide a non-destructive kept-only visualization mode for loaded assets
-- support composing directly from the currently selected saved workspace catalog entry through `POST /workspaces/{workspaceId}/compose`
+- support composing directly from a saved workspace snapshot through `POST /workspaces/{workspaceId}/compose`
 - keep a lower-level `POST /compose` route for direct asset-list compose requests
 - compose any number of assets by propagating mesh selection to latent voxels, applying transforms, and decoding a new asset on the backend
 
