@@ -58,6 +58,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.promptKeyboard = null;
     this.assetInstances = new Map();
     this.assetDerivedViews = new Map();
+    this.catalogItems = [];
+    this.catalogIndex = 0;
+    this.workspaceCatalogItems = [];
+    this.workspaceCatalogIndex = 0;
     this.activeAssetId = null;
     this.selectionController = null;
     this.isSelectionMode = false;
@@ -83,6 +87,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateMicDiagnostics();
     this.refreshPromptText();
     this.updateSelectionUi();
+    this.refreshCatalogUi();
+    this.refreshWorkspaceCatalogUi();
     this.setStatus(
       USE_DESKTOP_GEMINI_CAPTURE
         ? 'Ready. Capture will use assets/desktop_gemini.png for testing.'
@@ -216,28 +222,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     generateButton.onTriggered = () => this.generateAsset();
 
     const actionsRowBottom = mainGrid.addRow({weight: 0.11});
-    const saveButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
-      text: 'Save WS',
-      backgroundColor: '#065f46',
-      fontColor: '#ffffff',
-      fontSizeDp: 17,
-      opacity: 0.98,
-      width: 0.82,
-      height: 0.62,
-    });
-    saveButton.onTriggered = () => this.saveWorkspace();
-
-    const loadButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
-      text: 'Load WS',
-      backgroundColor: '#7c3aed',
-      fontColor: '#ffffff',
-      fontSizeDp: 17,
-      opacity: 0.98,
-      width: 0.82,
-      height: 0.62,
-    });
-    loadButton.onTriggered = () => this.loadWorkspace();
-
     const resetButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
       text: 'Reset',
       backgroundColor: '#6b7280',
@@ -248,6 +232,33 @@ export class Sam3dWorkspaceScene extends xb.Script {
       height: 0.62,
     });
     resetButton.onTriggered = () => this.resetWorkspace();
+
+    this.testMicButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Test Mic',
+      backgroundColor: '#b45309',
+      fontColor: '#ffffff',
+      fontSizeDp: 16,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
+    });
+    this.testMicButton.onTriggered = () => this.runMicCapabilityTest();
+
+    const clearButton = actionsRowBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Clear Preview',
+      backgroundColor: '#374151',
+      fontColor: '#ffffff',
+      fontSizeDp: 16,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.62,
+    });
+    clearButton.onTriggered = () => {
+      this.lastScreenshotDataUrl = '';
+      this.workspaceState.lastScreenshotDataUrl = '';
+      this.previewImage.load('');
+      this.setStatus('Screenshot preview cleared.');
+    };
 
     mainGrid.addRow({weight: 0.05}).addText({
       text: 'Latest Capture',
@@ -273,34 +284,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingY: 0.04,
     });
     previewFrame.updateLayouts();
-
-    const previewActionsRow = mainGrid.addRow({weight: 0.09});
-    const clearButton = previewActionsRow.addCol({weight: 0.5}).addTextButton({
-      text: 'Clear Preview',
-      backgroundColor: '#374151',
-      fontColor: '#ffffff',
-      fontSizeDp: 16,
-      opacity: 0.98,
-      width: 0.88,
-      height: 0.56,
-    });
-    clearButton.onTriggered = () => {
-      this.lastScreenshotDataUrl = '';
-      this.workspaceState.lastScreenshotDataUrl = '';
-      this.previewImage.load('');
-      this.setStatus('Screenshot preview cleared.');
-    };
-
-    this.testMicButton = previewActionsRow.addCol({weight: 0.5}).addTextButton({
-      text: 'Test Mic',
-      backgroundColor: '#b45309',
-      fontColor: '#ffffff',
-      fontSizeDp: 16,
-      opacity: 0.98,
-      width: 0.88,
-      height: 0.56,
-    });
-    this.testMicButton.onTriggered = () => this.runMicCapabilityTest();
 
     this.micDiagnosticsText = mainGrid.addRow({weight: 0.11}).addText({
       text: 'Mic diagnostics: checking...',
@@ -413,7 +396,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.libraryPanel = new xb.SpatialPanel({
       width: 0.48,
-      height: 0.68,
+      height: 0.98,
       backgroundColor: '#172554EE',
       useDefaultPosition: false,
     });
@@ -475,18 +458,29 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.catalogRefreshButton.onTriggered = () => this.refreshAssetCatalog();
 
     const catalogButtonsBottom = libraryGrid.addRow({weight: 0.18});
-    this.catalogLoadButton = catalogButtonsBottom.addTextButton({
-      text: 'Load Asset Into Workspace',
+    this.catalogLoadButton = catalogButtonsBottom.addCol({weight: 0.5}).addTextButton({
+      text: 'Load Asset',
       backgroundColor: '#7c3aed',
       fontColor: '#ffffff',
       fontSizeDp: 15,
       opacity: 0.98,
-      width: 0.9,
+      width: 0.88,
       height: 0.58,
     });
     this.catalogLoadButton.onTriggered = () => this.loadCatalogAsset();
 
-    libraryGrid.addRow({weight: 0.14}).addText({
+    this.catalogDeleteButton = catalogButtonsBottom.addCol({weight: 0.5}).addTextButton({
+      text: 'Delete Asset',
+      backgroundColor: '#991b1b',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
+    });
+    this.catalogDeleteButton.onTriggered = () => this.deleteSelectedCatalogAsset();
+
+    libraryGrid.addRow({weight: 0.12}).addText({
       text: 'Catalog buttons operate on backend assets. Save/Load WS operate on workspaces.',
       fontSizeDp: 13,
       fontColor: '#bfdbfe',
@@ -497,6 +491,104 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingX: 0.03,
       paddingY: 0.01,
     });
+
+    libraryGrid.addRow({weight: 0.1}).addText({
+      text: 'Workspace Catalog',
+      fontSizeDp: 18,
+      fontColor: '#dbeafe',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    this.workspaceStatusText = libraryGrid.addRow({weight: 0.08}).addText({
+      text: 'Current WS: ' + this.apiClient.workspaceId,
+      fontSizeDp: 13,
+      fontColor: '#bfdbfe',
+      anchorX: 'left',
+      textAlign: 'left',
+      paddingX: 0.03,
+    });
+
+    this.workspaceCatalogText = libraryGrid.addRow({weight: 0.18}).addText({
+      text: 'Workspace catalog: press Refresh WS.',
+      fontSizeDp: 14,
+      fontColor: '#cbd5e1',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    const workspaceButtonsTop = libraryGrid.addRow({weight: 0.15});
+    this.workspaceCatalogPrevButton = workspaceButtonsTop.addCol({weight: 0.33}).addTextButton({
+      text: 'Prev WS',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceCatalogPrevButton.onTriggered = () => this.stepWorkspaceCatalog(-1);
+
+    this.workspaceCatalogNextButton = workspaceButtonsTop.addCol({weight: 0.33}).addTextButton({
+      text: 'Next WS',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceCatalogNextButton.onTriggered = () => this.stepWorkspaceCatalog(1);
+
+    this.workspaceCatalogRefreshButton = workspaceButtonsTop.addCol({weight: 0.34}).addTextButton({
+      text: 'Refresh WS',
+      backgroundColor: '#1d4ed8',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceCatalogRefreshButton.onTriggered = () => this.refreshWorkspaceCatalog();
+
+    const workspaceButtonsBottom = libraryGrid.addRow({weight: 0.14});
+    this.workspaceSnapshotButton = workspaceButtonsBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Snapshot WS',
+      backgroundColor: '#065f46',
+      fontColor: '#ffffff',
+      fontSizeDp: 14,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceSnapshotButton.onTriggered = () => this.saveWorkspace();
+
+    this.workspaceCatalogLoadButton = workspaceButtonsBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Load WS',
+      backgroundColor: '#0f766e',
+      fontColor: '#ffffff',
+      fontSizeDp: 14,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceCatalogLoadButton.onTriggered = () => this.loadSelectedWorkspaceCatalogItem();
+
+    this.workspaceCatalogDeleteButton = workspaceButtonsBottom.addCol({weight: 1 / 3}).addTextButton({
+      text: 'Delete WS',
+      backgroundColor: '#991b1b',
+      fontColor: '#ffffff',
+      fontSizeDp: 14,
+      opacity: 0.98,
+      width: 0.82,
+      height: 0.58,
+    });
+    this.workspaceCatalogDeleteButton.onTriggered = () => this.deleteSelectedWorkspaceCatalogItem();
 
     this.libraryPanel.updateLayouts();
   }
@@ -1234,6 +1326,43 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.catalogText.text = `Catalog ${index + 1}/${this.catalogItems.length}: ${item.assetId}\n${prompt}\nSource: ${source}`;
   }
 
+  refreshWorkspaceStatusText() {
+    if (!this.workspaceStatusText) {
+      return;
+    }
+    this.workspaceStatusText.text = `Current WS: ${this.apiClient.workspaceId}`;
+  }
+
+  refreshWorkspaceCatalogUi() {
+    if (!this.workspaceCatalogText) {
+      return;
+    }
+
+    if (!this.workspaceCatalogItems.length) {
+      this.workspaceCatalogText.text = 'Workspace catalog: no saved workspaces found. Press Refresh WS.';
+      this.refreshWorkspaceStatusText();
+      return;
+    }
+
+    const index = Math.max(
+      0,
+      Math.min(this.workspaceCatalogIndex, this.workspaceCatalogItems.length - 1)
+    );
+    const item = this.workspaceCatalogItems[index];
+    const prompt = item?.prompt || item?.workspaceId || 'Unnamed workspace';
+    const assetCount = item?.assetCount ?? item?.workspace?.assets?.length ?? 0;
+    const savedAt = item?.savedAt
+      ? new Date(item.savedAt).toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : 'unknown time';
+    this.workspaceCatalogText.text = `WS ${index + 1}/${this.workspaceCatalogItems.length}: ${item.workspaceId}\n${prompt}\nAssets: ${assetCount} | Saved: ${savedAt}`;
+    this.refreshWorkspaceStatusText();
+  }
+
   async fetchAssetCatalogItems() {
     if (this.apiClient.useBackend) {
       const response = await fetch(`${this.apiClient.backendUrl}/assets`);
@@ -1287,6 +1416,50 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  async fetchWorkspaceCatalogItems() {
+    if (this.apiClient.useBackend) {
+      const response = await fetch(`${this.apiClient.backendUrl}/workspaces`);
+      if (!response.ok) {
+        throw new Error(`Workspace listing failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      return payload.items || payload.workspaces || payload.workspaceIds || [];
+    }
+
+    const raw = localStorage.getItem('xrblocks.sam3d_workspace.phase1');
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    return [{
+      workspaceId: parsed.workspaceId || this.apiClient.workspaceId,
+      savedAt: parsed.savedAt || Date.now(),
+      prompt: parsed?.workspace?.prompt || this.currentPrompt,
+      assetCount: parsed?.workspace?.assets?.length || 0,
+    }];
+  }
+
+  async refreshWorkspaceCatalog() {
+    this.setStatus('Refreshing workspace catalog...');
+    try {
+      this.workspaceCatalogItems = await this.fetchWorkspaceCatalogItems();
+      this.workspaceCatalogIndex = 0;
+      this.refreshWorkspaceCatalogUi();
+      this.setStatus(
+        this.workspaceCatalogItems.length
+          ? `Loaded ${this.workspaceCatalogItems.length} workspace(s) into the catalog.`
+          : 'Workspace catalog is empty.'
+      );
+    } catch (error) {
+      console.error('Failed to refresh workspace catalog.', error);
+      this.workspaceCatalogItems = [];
+      this.workspaceCatalogIndex = 0;
+      this.refreshWorkspaceCatalogUi();
+      this.setStatus('Workspace catalog refresh failed.');
+    }
+  }
+
   stepCatalog(direction) {
     if (!this.catalogItems.length) {
       this.setStatus('No catalog items available yet.');
@@ -1313,6 +1486,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       thumbnailUrl: selected.thumbnailUrl || '',
       transformMatrix: normalizeTransformMatrix(existingRecord) || null,
       selections: existingRecord?.selections || [],
+      viewMode: existingRecord?.viewMode || 'full',
     };
 
     await this.instantiateAssetRecord(assetRecord);
@@ -1321,6 +1495,121 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshPromptText();
     this.setStatus(`Loaded catalog asset ${assetRecord.assetId} into the workspace.`);
   }
+
+  async deleteSelectedCatalogAsset() {
+    if (!this.catalogItems.length) {
+      this.setStatus('No catalog asset is available to delete.');
+      return;
+    }
+
+    const selected = this.catalogItems[this.catalogIndex];
+    if (!selected?.assetId) {
+      this.setStatus('Selected asset entry is missing an assetId.');
+      return;
+    }
+
+    if (!this.apiClient.useBackend) {
+      this.setStatus('Asset delete is only available when using the backend catalog.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.apiClient.backendUrl}/assets/${selected.assetId}`, {method: 'DELETE'});
+      if (response.status === 409) {
+        this.setStatus(`Cannot delete asset ${selected.assetId} because it is still referenced by a saved workspace.`);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Asset delete failed: ${response.status}`);
+      }
+
+      if (this.getAssetRecord(selected.assetId)) {
+        this.removeAssetInstance(selected.assetId);
+        this.workspaceState.assets = this.workspaceState.assets.filter(
+          (asset) => asset.assetId !== selected.assetId
+        );
+        this.syncSelectionController();
+        this.refreshPromptText();
+      }
+
+      await this.refreshAssetCatalog();
+      this.setStatus(`Deleted asset ${selected.assetId} from the backend catalog.`);
+    } catch (error) {
+      console.error('Failed to delete asset.', error);
+      this.setStatus('Asset delete failed.');
+    }
+  }
+
+  stepWorkspaceCatalog(direction) {
+    if (!this.workspaceCatalogItems.length) {
+      this.setStatus('No workspace catalog items available yet.');
+      return;
+    }
+    const count = this.workspaceCatalogItems.length;
+    this.workspaceCatalogIndex =
+      (this.workspaceCatalogIndex + direction + count) % count;
+    this.refreshWorkspaceCatalogUi();
+  }
+
+  async loadSelectedWorkspaceCatalogItem() {
+    if (!this.workspaceCatalogItems.length) {
+      this.setStatus('No workspace catalog item is available to load.');
+      return;
+    }
+
+    const selected = this.workspaceCatalogItems[this.workspaceCatalogIndex];
+    if (!selected?.workspaceId) {
+      this.setStatus('Selected workspace entry is missing a workspaceId.');
+      return;
+    }
+
+    this.apiClient.workspaceId = selected.workspaceId;
+    this.refreshWorkspaceStatusText();
+    await this.loadWorkspace();
+    this.refreshWorkspaceCatalogUi();
+  }
+
+  async deleteSelectedWorkspaceCatalogItem() {
+    if (!this.workspaceCatalogItems.length) {
+      this.setStatus('No workspace catalog item is available to delete.');
+      return;
+    }
+
+    const selected = this.workspaceCatalogItems[this.workspaceCatalogIndex];
+    if (!selected?.workspaceId) {
+      this.setStatus('Selected workspace entry is missing a workspaceId.');
+      return;
+    }
+
+    try {
+      if (this.apiClient.useBackend) {
+        const response = await fetch(`${this.apiClient.backendUrl}/workspaces/${selected.workspaceId}`, {method: 'DELETE'});
+        if (!response.ok) {
+          throw new Error(`Workspace delete failed: ${response.status}`);
+        }
+      } else {
+        const raw = localStorage.getItem('xrblocks.sam3d_workspace.phase1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if ((parsed.workspaceId || this.apiClient.workspaceId) === selected.workspaceId) {
+            localStorage.removeItem('xrblocks.sam3d_workspace.phase1');
+          }
+        }
+      }
+
+      if (this.apiClient.workspaceId === selected.workspaceId) {
+        this.apiClient.workspaceId = 'workspace-local';
+        this.refreshWorkspaceStatusText();
+      }
+
+      await this.refreshWorkspaceCatalog();
+      this.setStatus(`Deleted workspace ${selected.workspaceId}.`);
+    } catch (error) {
+      console.error('Failed to delete workspace.', error);
+      this.setStatus('Workspace delete failed.');
+    }
+  }
+
   async generateAsset() {
     if (!this.lastScreenshotDataUrl) {
       this.setStatus('Capture a screenshot before generating.');
@@ -1456,10 +1745,25 @@ export class Sam3dWorkspaceScene extends xb.Script {
     };
   }
 
+  generateWorkspaceSnapshotId() {
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\..+/, '')
+      .replace('T', '-');
+    return `workspace-${stamp}-${crypto.randomUUID().slice(0, 8)}`;
+  }
+
   async saveWorkspace() {
     const workspace = this.buildWorkspaceSnapshot();
+    this.apiClient.workspaceId = this.generateWorkspaceSnapshotId();
+    this.refreshWorkspaceStatusText();
     const saved = await this.apiClient.saveWorkspace(workspace);
+    this.refreshWorkspaceCatalog().catch((error) => {
+      console.warn('Failed to refresh workspace catalog after save.', error);
+    });
     const destination = this.apiClient.getStorageLabel();
+    const savedWorkspaceId = this.apiClient.workspaceId;
     const savedAt = saved?.savedAt
       ? new Date(saved.savedAt).toLocaleTimeString([], {
           hour: '2-digit',
@@ -1472,7 +1776,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
     this.setStatus(
-      `Workspace saved to ${destination} at ${savedAt} with ${workspace.assets.length} asset(s).`
+      `Workspace snapshot ${savedWorkspaceId} saved to ${destination} at ${savedAt} with ${workspace.assets.length} asset(s).`
     );
   }
 
@@ -1494,6 +1798,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.currentPrompt = this.workspaceState.prompt;
     this.refreshPromptText();
+    this.refreshWorkspaceStatusText();
     if (this.promptKeyboard) {
       this.promptKeyboard.setText(this.currentPrompt);
     }

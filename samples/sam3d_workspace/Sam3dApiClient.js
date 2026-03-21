@@ -41,7 +41,16 @@ export class Sam3dApiClient {
   }
 
   getStorageLabel() {
-    return this.useBackend ? 'mock backend' : 'local scaffold client';
+    if (!this.useBackend) {
+      return 'local scaffold client';
+    }
+
+    try {
+      const url = new URL(this.backendUrl);
+      return `backend server (${url.host})`;
+    } catch (_) {
+      return 'backend server';
+    }
   }
 
   async createGenerationJob({sessionId, prompt, image}) {
