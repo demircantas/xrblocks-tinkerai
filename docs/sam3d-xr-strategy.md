@@ -48,7 +48,11 @@ The repository already contains useful pieces of this workflow, but it does not 
 - The current desktop combine path supports exactly two objects.
 - The current desktop combine path does not yet implement the full `compose_latents.ipynb` workflow.
 - The XR Blocks sample now supports mesh selection with keep/discard painting, saves canonical kept vertex indices, and persists selection state to the backend-backed workspace payload.
-- The frontend still lacks an asset-catalog workflow, a non-destructive kept-only visualization mode, and a compose action wired to the backend contract.
+- The XR Blocks sample now includes backend-backed asset and workspace catalogs in the debug UI.
+- The XR Blocks sample now includes a non-destructive per-asset kept-only visualization mode.
+- The XR Blocks sample now supports workspace snapshots instead of overwriting a single default workspace id on every save.
+- The XR Blocks sample now supports deleting workspaces and deleting assets from the backend catalog, with a backend-side safeguard that rejects asset deletion while the asset is still referenced by any saved workspace.
+- The frontend still lacks a compose action wired to the backend contract and still uses a debug-panel-heavy workflow rather than a study-facing user UI.
 
 ## Agreed State Model
 
@@ -185,6 +189,8 @@ The XR frontend is responsible for:
 - browsing previously saved assets and workspaces from backend catalog routes
 - loading multiple assets into one live workspace
 - providing a non-destructive visualization mode that shows only the kept mesh region for any asset
+- snapshotting workspaces under new backend workspace ids instead of overwriting one default workspace id
+- deleting workspaces and assets through backend catalog actions when supported by the backend routes
 - sending composition requests that reference existing backend latent handles
 
 The frontend should not attempt to recompute latent-space edits locally.
@@ -283,6 +289,8 @@ Routes:
 - `GET /workspaces`
 - `POST /workspaces/{workspaceId}/save`
 - `GET /workspaces/{workspaceId}`
+- `DELETE /workspaces/{workspaceId}`
+- `DELETE /assets/{assetId}`
 
 ### Current implemented listing responses
 
@@ -390,10 +398,17 @@ The backend should treat the workspace payload as the source of truth for fronte
 - current selections
 - current asset list
 - current prompt and last screenshot
+- per-asset kept-only/full visualization mode when the frontend chooses to persist it
 
 The backend should not require the frontend to upload latents as part of save/load.
 
 `workspaceId` must be stable across sessions so a saved workspace can be reopened later by any frontend session with access to the backend.
+
+Current frontend behavior note:
+
+- the debug UI now treats save as a workspace snapshot action
+- each snapshot generates a fresh `workspaceId` before calling `POST /workspaces/{workspaceId}/save`
+- loading a workspace from the workspace catalog switches the active frontend `workspaceId` first, then calls `GET /workspaces/{workspaceId}`
 
 The backend should also expose a stable asset-listing route so the frontend can discover previously generated and composed assets without relying on only the currently loaded workspace.
 
@@ -509,6 +524,34 @@ This keeps the frontend independent from latent topology while still allowing la
 
 The current XR Blocks sample computes selection from recorded brush stroke points on release. The live brush visualization is currently sphere-based because it is stable and performant enough for headset testing. A marching-cubes or metaball brush may still be revisited later as a polish task, but it is not required for the saved contract.
 
+## Current Frontend Debug UI
+
+The current XR Blocks frontend uses a debug-oriented multi-pane UI rather than a study-facing embodied UI.
+
+The current panes are:
+
+- a main panel for prompt, capture, generate, preview, reset, and diagnostics
+- a selection panel for mesh filtering tools
+- a library panel for asset and workspace catalogs
+
+The current debug UI supports:
+
+- asset catalog browsing via `GET /assets`
+- workspace catalog browsing via `GET /workspaces`
+- loading selected assets into the current live workspace
+- snapshotting workspaces under new ids
+- loading selected workspaces
+- deleting selected workspaces
+- deleting selected assets
+
+Delete behavior currently expected by the frontend:
+
+- `DELETE /workspaces/{workspaceId}` deletes one saved workspace
+- `DELETE /assets/{assetId}` deletes one saved asset
+- `DELETE /assets/{assetId}` returns `409` if that asset is still referenced by any saved workspace, and the frontend surfaces that safeguard message to the user
+
+This debug UI is intentional for backend and systems testing. It is not the intended final user-study interface.
+
 ## Multi-Object Strategy
 
 The backend should support composition of `N >= 2` assets with the same pipeline:
@@ -525,13 +568,13 @@ The API should not be special-cased for only two objects.
 
 The next backend and frontend work should be:
 
-1. Add a frontend asset-catalog workflow backed by `GET /assets` so the user can browse and load multiple saved assets into the current workspace.
-2. Add a workspace-browsing workflow backed by `GET /workspaces` so users can reopen prior sessions intentionally instead of only restoring the latest saved workspace.
-3. Add a non-destructive per-asset visualization mode that renders only the kept region of the mesh while preserving the original mesh and saved selection state.
-4. Keep save/load centered on frontend editing state, not latent upload.
-5. Promote the `compose_latents.ipynb` workflow into a backend composition service.
-6. Replace the current two-object combine limitation with an `N`-object composition endpoint.
-7. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
+1. Keep the current asset and workspace catalog routes stable while the frontend/backend integration is still moving quickly.
+2. Keep workspace snapshots centered on frontend editing state, not latent upload.
+3. Keep the non-destructive kept-only visualization mode aligned with saved mesh selections.
+4. Promote the `compose_latents.ipynb` workflow into a backend composition service.
+5. Replace the current two-object combine limitation with an `N`-object composition endpoint.
+6. Add `GET /assets/{assetId}` for full asset metadata if the frontend needs detail beyond the list view.
+7. Begin separating the debug UI from the eventual user-study UI so embodied interaction and speech-first flows can evolve without destabilizing backend testing tools.
 
 ## Summary
 
@@ -542,6 +585,8 @@ The agreed strategy is:
 - let the frontend store transforms and mesh selections only
 - support multiple saved assets in one workspace
 - let the user browse backend asset and workspace catalogs instead of only restoring the most recent saved object implicitly
+- treat workspace save as snapshot creation in the current debug UI
+- support deleting saved workspaces and deleting saved assets, with backend safeguards preventing deletion of assets still referenced by saved workspaces
 - provide a non-destructive kept-only visualization mode for loaded assets
 - compose any number of assets by propagating mesh selection to latent voxels, applying transforms, and decoding a new asset on the backend
 
