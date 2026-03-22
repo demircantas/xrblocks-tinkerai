@@ -13,6 +13,9 @@ const HANDLE_OPACITY = 0.94;
 const ACTIVE_OPACITY = 1.0;
 const MIN_SCALE = 0.01;
 const MAX_SCALE = 50;
+const DIRECT_GRAB_TORUS_THRESHOLD = 0.22;
+const DIRECT_GRAB_SPHERE_THRESHOLD = 0.22;
+const DIRECT_GRAB_BOX_THRESHOLD = 0.18;
 
 export class TransformGizmoController {
   constructor({sceneRoot, onTransformChanged = () => {}, onStatus = () => {}} = {}) {
@@ -97,7 +100,7 @@ export class TransformGizmoController {
 
   onSelectStart(event) {
     if (!this.enabled || !this.target) return false;
-    const hit = this.findHandleIntersection(event.target);
+    const hit = this.findHandleHit(event.target);
     if (!hit) return false;
 
     const interaction = this.beginInteraction(hit, event.target);
@@ -265,7 +268,7 @@ export class TransformGizmoController {
       target;
   }
 
-  findHandleIntersection(controller) {
+  findHandleHit(controller) {
     const intersections = xb.core.input?.intersectionsForController?.get(controller) || [];
     for (const intersection of intersections) {
       let current = intersection.object;
@@ -280,7 +283,63 @@ export class TransformGizmoController {
         current = current.parent;
       }
     }
+
+    if (xb.core.renderer?.xr?.isPresenting) {
+      return this.findHandleByProximity(controller);
+    }
+
     return null;
+  }
+
+  findHandleByProximity(controller) {
+    controller.updateMatrixWorld(true);
+    const controllerWorld = controller.getWorldPosition(this.pointerWorldPosition).clone();
+    let bestHit = null;
+    let bestDistance = Infinity;
+
+    for (const mesh of this.handles) {
+      const handle = mesh.userData?.transformHandle;
+      if (!handle) continue;
+      const localPoint = mesh.worldToLocal(controllerWorld.clone());
+      let score = Infinity;
+      let hitPointLocal = null;
+
+      if (handle.type === 'rotate') {
+        const radial = Math.sqrt(localPoint.x * localPoint.x + localPoint.y * localPoint.y);
+        const tubeDistance = Math.sqrt((radial - 1) * (radial - 1) + localPoint.z * localPoint.z);
+        score = tubeDistance;
+        if (tubeDistance <= DIRECT_GRAB_TORUS_THRESHOLD) {
+          const safeRadial = radial > 1e-5 ? radial : 1;
+          hitPointLocal = new THREE.Vector3(localPoint.x / safeRadial, localPoint.y / safeRadial, 0);
+        }
+      } else if (handle.type === 'move') {
+        score = localPoint.length();
+        if (score <= DIRECT_GRAB_SPHERE_THRESHOLD) {
+          hitPointLocal = new THREE.Vector3(0, 0, 0);
+        }
+      } else if (handle.type === 'scale') {
+        const dx = Math.max(Math.abs(localPoint.x) - SCALE_HANDLE_SIZE * 0.5, 0);
+        const dy = Math.max(Math.abs(localPoint.y) - SCALE_HANDLE_SIZE * 0.5, 0);
+        const dz = Math.max(Math.abs(localPoint.z) - SCALE_HANDLE_SIZE * 0.5, 0);
+        score = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (score <= DIRECT_GRAB_BOX_THRESHOLD) {
+          hitPointLocal = new THREE.Vector3(0, 0, 0);
+        }
+      }
+
+      if (!hitPointLocal || score >= bestDistance) continue;
+      bestDistance = score;
+      bestHit = {
+        intersection: {
+          point: mesh.localToWorld(hitPointLocal.clone()),
+          object: mesh,
+        },
+        object: mesh,
+        handle,
+      };
+    }
+
+    return bestHit;
   }
 
   beginInteraction(hit, controller) {
@@ -314,6 +373,20 @@ export class TransformGizmoController {
     }
 
     if (handle.type === 'move') {
+      if (xb.core.renderer?.xr?.isPresenting) {
+        const controllerWorldPosition = this.getControllerWorldPosition(controller);
+        return {
+          mode: 'move',
+          controller,
+          handle,
+          originalPosition,
+          originalQuaternion,
+          originalScale,
+          controllerStartPosition: controllerWorldPosition,
+          statusStart: 'Moving active asset freely in XR.',
+        };
+      }
+
       xb.core.camera.getWorldDirection(this.cameraDirection).normalize();
       this.plane.setFromNormalAndCoplanarPoint(this.cameraDirection, originalPosition);
       const startPoint = this.intersectControllerPlane(controller, this.plane);
@@ -334,6 +407,21 @@ export class TransformGizmoController {
     }
 
     if (handle.type === 'scale') {
+      if (xb.core.renderer?.xr?.isPresenting) {
+        const controllerWorldPosition = this.getControllerWorldPosition(controller);
+        const startDistance = controllerWorldPosition.distanceTo(originalPosition);
+        return {
+          mode: 'scale',
+          controller,
+          handle,
+          originalPosition,
+          originalQuaternion,
+          originalScale,
+          startDistance: Math.max(startDistance, 1e-4),
+          statusStart: 'Scaling active asset uniformly.',
+        };
+      }
+
       xb.core.camera.getWorldDirection(this.cameraDirection).normalize();
       this.plane.setFromNormalAndCoplanarPoint(this.cameraDirection, originalPosition);
       const startPoint = this.intersectControllerPlane(controller, this.plane);
@@ -362,7 +450,7 @@ export class TransformGizmoController {
     if (!this.target) return;
 
     if (interaction.mode === 'rotate') {
-      const point = this.intersectControllerPlane(controller, this.plane);
+      const point = this.getRotationInteractionPoint(controller, this.plane);
       if (!point) return;
       const currentVector = this.projectPointToPlane(point, interaction.centerWorld, interaction.axisWorld);
       if (!currentVector || currentVector.lengthSq() < 1e-6) return;
@@ -371,15 +459,28 @@ export class TransformGizmoController {
       const nextWorldQuaternion = this.tmpQuaternion2.copy(deltaQuat).multiply(interaction.originalQuaternion);
       this.setTargetWorldQuaternion(nextWorldQuaternion);
     } else if (interaction.mode === 'move') {
-      const point = this.intersectControllerPlane(controller, interaction.plane);
-      if (!point) return;
-      const delta = this.delta.copy(point).sub(interaction.startPoint);
-      const nextWorldPosition = this.tmpVector.copy(interaction.originalPosition).add(delta);
-      this.setTargetWorldPosition(nextWorldPosition);
+      if (xb.core.renderer?.xr?.isPresenting && interaction.controllerStartPosition) {
+        const controllerPosition = this.getControllerWorldPosition(controller);
+        const delta = this.delta.copy(controllerPosition).sub(interaction.controllerStartPosition);
+        const nextWorldPosition = this.tmpVector.copy(interaction.originalPosition).add(delta);
+        this.setTargetWorldPosition(nextWorldPosition);
+      } else {
+        const point = this.intersectControllerPlane(controller, interaction.plane);
+        if (!point) return;
+        const delta = this.delta.copy(point).sub(interaction.startPoint);
+        const nextWorldPosition = this.tmpVector.copy(interaction.originalPosition).add(delta);
+        this.setTargetWorldPosition(nextWorldPosition);
+      }
     } else if (interaction.mode === 'scale') {
-      const point = this.intersectControllerPlane(controller, interaction.plane);
-      if (!point) return;
-      const distance = Math.max(point.distanceTo(interaction.originalPosition), 1e-4);
+      let distance = 0;
+      if (xb.core.renderer?.xr?.isPresenting) {
+        const controllerPosition = this.getControllerWorldPosition(controller);
+        distance = Math.max(controllerPosition.distanceTo(interaction.originalPosition), 1e-4);
+      } else {
+        const point = this.intersectControllerPlane(controller, interaction.plane);
+        if (!point) return;
+        distance = Math.max(point.distanceTo(interaction.originalPosition), 1e-4);
+      }
       const factor = THREE.MathUtils.clamp(distance / interaction.startDistance, MIN_SCALE, MAX_SCALE);
       this.target.scale.copy(interaction.originalScale).multiplyScalar(factor);
       this.target.updateMatrix();
@@ -428,6 +529,18 @@ export class TransformGizmoController {
     const dot = THREE.MathUtils.clamp(from.dot(to), -1, 1);
     const angle = Math.atan2(cross.dot(axisNormal), dot);
     return angle;
+  }
+
+  getControllerWorldPosition(controller) {
+    controller.updateMatrixWorld(true);
+    return controller.getWorldPosition(this.pointerWorldPosition).clone();
+  }
+
+  getRotationInteractionPoint(controller, plane) {
+    if (xb.core.renderer?.xr?.isPresenting) {
+      return this.getControllerWorldPosition(controller);
+    }
+    return this.intersectControllerPlane(controller, plane);
   }
 
   intersectControllerPlane(controller, plane) {
