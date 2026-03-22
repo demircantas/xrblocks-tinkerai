@@ -993,30 +993,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   findModelContentRoot(model) {
     if (!model) return null;
-    return (
+    return model.gltfMesh?.scene ||
       model.children.find((child) => child.type === 'Group' || child.type === 'Scene') ||
-      model
-    );
-  }
-
-  findModelPoseRoot(model) {
-    if (!model) return null;
-
-    let current = model.gltfMesh?.scene || this.findModelContentRoot(model) || model;
-    while (
-      current &&
-      !current.isMesh &&
-      current.children?.length === 1
-    ) {
-      const child = current.children[0];
-      const isTransformCarrier = child.isMesh || child.type === 'Group' || child.type === 'Scene';
-      if (!isTransformCarrier) {
-        break;
-      }
-      current = child;
-    }
-
-    return current || model;
+      model;
   }
 
   assignSelectionNodePaths(model) {
@@ -1833,8 +1812,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
       data: {
         path,
         model: modelName,
-        scale: {x: 0.9, y: 0.9, z: 0.9},
+        scale: {x: 1.0, y: 1.0, z: 1.0},
+        verticallyAlignObject: false,
+        horizontallyAlignObject: false,
       },
+      setupRaycastCylinder: false,
+      setupRaycastBox: false,
+      setupPlatform: false,
       renderer: xb.core.renderer,
     });
 
@@ -1897,63 +1881,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
     );
   }
 
-  getVisibleContentWorldMatrix(model, fallbackMatrix = null) {
-    if (!model) {
-      return fallbackMatrix ? new THREE.Matrix4().fromArray(fallbackMatrix) : null;
-    }
-
-    const poseRoot = this.findModelPoseRoot(model);
-    if (!poseRoot || poseRoot === model) {
-      return fallbackMatrix
-        ? new THREE.Matrix4().fromArray(fallbackMatrix)
-        : new THREE.Matrix4().copy(model.matrixWorld);
-    }
-
-    return new THREE.Matrix4().copy(poseRoot.matrixWorld);
-  }
-
   getPersistedTransformMatrix(model, fallbackMatrix = null) {
-    const visibleMatrix = this.getVisibleContentWorldMatrix(model, fallbackMatrix);
-    if (!visibleMatrix) {
+    if (!model) {
       return fallbackMatrix;
     }
-    return visibleMatrix.toArray();
+
+    model.updateMatrixWorld(true);
+    return model.matrixWorld.toArray();
   }
 
   applyPersistedTransformToModel(model, transformArray) {
     if (!model || !transformArray) return;
-
-    const poseRoot = this.findModelPoseRoot(model);
-    const desiredContentWorld = new THREE.Matrix4().fromArray(transformArray);
-
-    if (!poseRoot || poseRoot === model) {
-      this.applyTransformToModel(model, desiredContentWorld.toArray());
-      return;
-    }
-
-    model.updateMatrixWorld(true);
-    poseRoot.updateMatrixWorld(true);
-
-    const modelWorldInverse = new THREE.Matrix4().copy(model.matrixWorld).invert();
-    const poseRootLocalToModel = modelWorldInverse.multiply(
-      new THREE.Matrix4().copy(poseRoot.matrixWorld)
-    );
-    const desiredWrapperWorld = desiredContentWorld
-      .clone()
-      .multiply(poseRootLocalToModel.invert());
-    const parentWorldInverse = model.parent
-      ? model.parent.matrixWorld.clone().invert()
-      : new THREE.Matrix4();
-    const desiredWrapperLocal = parentWorldInverse.multiply(desiredWrapperWorld);
-
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    desiredWrapperLocal.decompose(position, quaternion, scale);
-    model.position.copy(position);
-    model.quaternion.copy(quaternion);
-    model.scale.copy(scale);
-    model.updateMatrix();
+    this.applyTransformToModel(model, transformArray);
     model.updateMatrixWorld(true);
   }
 
@@ -2066,6 +2005,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     model.quaternion.copy(quaternion);
     model.scale.copy(scale);
     model.updateMatrix();
+    model.updateMatrixWorld(true);
   }
 
   resetWorkspace() {
