@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as xb from 'xrblocks';
 import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 
@@ -71,6 +72,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.activeAssetId = null;
     this.selectionController = null;
     this.isSelectionMode = false;
+    this.environmentTarget = null;
+    this.environmentTexture = null;
+    this.previousEnvironment = null;
     this.workspaceState = this.createEmptyWorkspaceState();
   }
 
@@ -85,6 +89,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   init() {
     xb.core.input.addReticles();
+    this.setupEnvironmentLighting();
     this.addLights();
     this.createWorkspaceUI();
     this.createPromptKeyboard();
@@ -102,11 +107,21 @@ export class Sam3dWorkspaceScene extends xb.Script {
     );
   }
 
+  setupEnvironmentLighting() {
+    if (!xb.core?.renderer || !xb.core?.scene || this.environmentTexture) return;
+
+    this.previousEnvironment = xb.core.scene.environment || null;
+    const pmrem = new THREE.PMREMGenerator(xb.core.renderer);
+    pmrem.compileEquirectangularShader();
+    this.environmentTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
+    this.environmentTexture = this.environmentTarget.texture;
+    xb.core.scene.environment = this.environmentTexture;
+    pmrem.dispose();
+  }
+
   addLights() {
-    this.add(new THREE.HemisphereLight(0xbbbbbb, 0x777788, 2.5));
-    const light = new THREE.DirectionalLight(0xffffff, 2);
-    light.position.set(0, 3, -1);
-    this.add(light);
+    this.add(new THREE.AmbientLight(0xffffff, 0.35));
+    this.add(new THREE.HemisphereLight(0xbbbbbb, 0x777788, 0.8));
   }
 
   createWorkspaceUI() {
@@ -2103,6 +2118,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.selectionController?.dispose();
     this.selectionController = null;
     this.clearAssetInstances();
+    if (xb.core?.scene && xb.core.scene.environment === this.environmentTexture) {
+      xb.core.scene.environment = this.previousEnvironment;
+    }
+    this.environmentTarget?.dispose?.();
+    this.environmentTarget = null;
+    this.environmentTexture = null;
+    this.previousEnvironment = null;
     super.dispose();
   }
 }
