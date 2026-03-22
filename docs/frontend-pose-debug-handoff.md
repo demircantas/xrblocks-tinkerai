@@ -24,7 +24,7 @@ That patch fixed one compose offset case temporarily, but it also created hidden
 
 That coupling is not a good long-term contract.
 
-The backend patch is now still present but gated behind:
+The backend compatibility patch is still present but gated behind:
 
 ```python
 ENABLE_FRONTEND_MODELVIEWER_LAYOUT_COMPAT = False
@@ -35,6 +35,13 @@ in:
 - [xr_svc.py](/home/farazfaruqi/sam-3d-objects/desktop-exp/backend/services/xr_svc.py)
 
 It is `false` by default.
+
+The backend now also defaults to the least opinionated compose path:
+
+- `composeMode: "notebook_v1"`
+- `projectionMode: "nearest"`
+
+The intent is to keep backend-side pose reinterpretation minimal and push frame stability to the frontend.
 
 ## Why We Believe This Is Frontend-Side
 
@@ -122,6 +129,7 @@ The better long-term contract is:
 
 - save transforms in a frame that is explicitly defined and stable
 - avoid hidden presentation/layout transforms affecting persisted pose semantics
+- make frontend-authored transforms the only pose authority the backend must trust
 
 Practically, one of these should become true:
 
@@ -129,20 +137,38 @@ Practically, one of these should become true:
 2. The frontend persists the wrapper transform plus explicit content-layout metadata.
 3. The frontend removes or standardizes hidden content recentering/grounding so saved transforms have stable meaning.
 
+The preferred direction is `1` or `3`. The backend should not keep learning frontend-specific grounding or recentering rules.
+
+## Current Backend Contract
+
+The backend is now intentionally conservative:
+
+- default compose path is `notebook_v1`
+- default projection is strict `nearest`
+- `ENABLE_FRONTEND_MODELVIEWER_LAYOUT_COMPAT` remains `False`
+
+This means the frontend should assume:
+
+- backend compose will not try to mimic `ModelViewer` layout behavior
+- backend compose expects saved transforms to already describe the intended authored pose
+- if frontend loading applies hidden recentering, grounding, or device-dependent child transforms, compose correctness will drift
+
 ## Backend Status
 
 The backend is intentionally no longer masking this by default.
 
 Current state:
 
-- backend compose works with `ENABLE_FRONTEND_MODELVIEWER_LAYOUT_COMPAT = False`
-- if needed for temporary debugging, that flag can be turned back on manually
-- but the preferred fix is frontend-side pose/frame stabilization
+- backend compose defaults to `notebook_v1` with `nearest` projection
+- backend compose runs with `ENABLE_FRONTEND_MODELVIEWER_LAYOUT_COMPAT = False`
+- the legacy `xr_v1` path still exists only as a debugging comparison path
+- the preferred fix remains frontend-side pose/frame stabilization
 
 ## Immediate Next Step
 
 Before more compose/color tuning, please confirm whether:
 
 - `save -> load workspace` preserves visible object pose exactly on Galaxy XR
+- the pose seen by the user is the same pose represented by the saved `transformMatrix`
 
-If not, that issue should be fixed first.
+If not, fix that on the frontend first.
