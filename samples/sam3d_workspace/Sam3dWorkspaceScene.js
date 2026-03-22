@@ -14,6 +14,11 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
+const BACKEND_LOCAL_FRAME_ROTATION_DEG = xb.getUrlParamFloat(
+  'backendLocalFrameRotationDeg',
+  90
+);
+const BACKEND_LOCAL_FRAME_AXIS = new THREE.Vector3(1, 0, 0);
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -33,6 +38,17 @@ function matrixWorldToArray(object3D) {
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
+function createBackendLocalFrameMatrix() {
+  return new THREE.Matrix4().makeRotationAxis(
+    BACKEND_LOCAL_FRAME_AXIS,
+    THREE.MathUtils.degToRad(BACKEND_LOCAL_FRAME_ROTATION_DEG)
+  );
+}
+
+function createFrontendLocalFrameMatrix() {
+  return createBackendLocalFrameMatrix().clone().invert();
+}
+
 
 async function loadImageAsDataUrl(url) {
   const response = await fetch(url);
@@ -1862,32 +1878,54 @@ export class Sam3dWorkspaceScene extends xb.Script {
     );
   }
 
-  getPersistedTransformMatrix(model, fallbackMatrix = null) {
+  getVisibleContentWorldMatrix(model, fallbackMatrix = null) {
     if (!model) {
-      return fallbackMatrix;
+      return fallbackMatrix ? new THREE.Matrix4().fromArray(fallbackMatrix) : null;
     }
 
     const contentRoot = this.findModelContentRoot(model);
     if (!contentRoot || contentRoot === model) {
-      return fallbackMatrix || matrixToArray(model);
+      return fallbackMatrix
+        ? new THREE.Matrix4().fromArray(fallbackMatrix)
+        : new THREE.Matrix4().copy(model.matrixWorld);
     }
 
-    return matrixWorldToArray(contentRoot);
+    return new THREE.Matrix4().copy(contentRoot.matrixWorld);
+  }
+
+  convertVisibleToBackendTransformMatrix(visibleMatrix) {
+    return visibleMatrix.clone().multiply(createBackendLocalFrameMatrix());
+  }
+
+  convertBackendToVisibleTransformMatrix(backendMatrix) {
+    return backendMatrix.clone().multiply(createFrontendLocalFrameMatrix());
+  }
+
+  getPersistedTransformMatrix(model, fallbackMatrix = null) {
+    const visibleMatrix = this.getVisibleContentWorldMatrix(model, fallbackMatrix);
+    if (!visibleMatrix) {
+      return fallbackMatrix;
+    }
+    return this.convertVisibleToBackendTransformMatrix(visibleMatrix).toArray();
   }
 
   applyPersistedTransformToModel(model, transformArray) {
     if (!model || !transformArray) return;
 
     const contentRoot = this.findModelContentRoot(model);
+    const backendMatrix = new THREE.Matrix4().fromArray(transformArray);
+    const desiredContentWorld = this.convertBackendToVisibleTransformMatrix(
+      backendMatrix
+    );
+
     if (!contentRoot || contentRoot === model) {
-      this.applyTransformToModel(model, transformArray);
+      this.applyTransformToModel(model, desiredContentWorld.toArray());
       return;
     }
 
     model.updateMatrixWorld(true);
     contentRoot.updateMatrixWorld(true);
 
-    const desiredContentWorld = new THREE.Matrix4().fromArray(transformArray);
     const contentLocal = contentRoot.matrix.clone();
     const desiredWrapperWorld = desiredContentWorld
       .clone()
