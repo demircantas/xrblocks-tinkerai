@@ -10,12 +10,14 @@ import {TransformGizmoController} from './TransformGizmoController.js';
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
+const DEBUG_UI = xb.getUrlParamBool('debugUi', false);
 const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
   'useDesktopGeminiCapture',
   false
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
+const USER_CAPTURE_PREVIEW_MS = 4000;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -60,6 +62,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
     super();
     this.apiClient = new Sam3dApiClient();
     this.sessionId = `session-${crypto.randomUUID()}`;
+    this.debugUiEnabled = DEBUG_UI;
+    this.userFlowMode = DEBUG_UI ? null : 'generate';
+    this.userFlowWorkspaceId = null;
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.recordingPurpose = 'prompt';
+    this.confirmationTranscript = '';
+    this.userCapturePreviewTimer = null;
     this.currentPrompt = getUrlParamString('prompt', DEFAULT_PROMPT);
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
@@ -107,10 +116,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateSelectionUi();
     this.refreshCatalogUi();
     this.refreshWorkspaceCatalogUi();
+    this.setDebugPanelVisibility(this.debugUiEnabled);
+    this.updateUserFlowUi();
     this.setStatus(
-      USE_DESKTOP_GEMINI_CAPTURE
-        ? 'Ready. Capture will use assets/desktop_gemini.png for testing.'
-        : 'Ready. Capture a screenshot, record a prompt, or edit it manually.'
+      this.debugUiEnabled
+        ? USE_DESKTOP_GEMINI_CAPTURE
+          ? 'Ready. Capture will use assets/desktop_gemini.png for testing.'
+          : 'Ready. Capture a screenshot, record a prompt, or edit it manually.'
+        : 'Generate mode. Use push-to-talk to describe the object you want to generate.'
     );
   }
 
@@ -807,9 +820,242 @@ export class Sam3dWorkspaceScene extends xb.Script {
       width: 0.9,
       height: 0.58,
     });
-    this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();
+    this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();    this.libraryPanel.updateLayouts();
 
-    this.libraryPanel.updateLayouts();
+    this.userFlowPanel = new xb.SpatialPanel({
+      width: 0.54,
+      height: 0.86,
+      backgroundColor: '#111827EE',
+      useDefaultPosition: false,
+    });
+    this.userFlowPanel.isRoot = true;
+    this.userFlowPanel.position.set(0, xb.user.height, -0.82);
+    this.add(this.userFlowPanel);
+
+    const userGrid = this.userFlowPanel.addGrid();
+    this.userFlowModeText = userGrid.addRow({weight: 0.1}).addText({
+      text: 'Generate',
+      fontSizeDp: 24,
+      fontColor: '#dbeafe',
+    });
+
+    this.userFlowDetailText = userGrid.addRow({weight: 0.14}).addText({
+      text: '',
+      fontSizeDp: 16,
+      fontColor: '#e5e7eb',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    this.userFlowStatusText = userGrid.addRow({weight: 0.14}).addText({
+      text: '',
+      fontSizeDp: 15,
+      fontColor: '#fde68a',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    const userPreviewRow = userGrid.addRow({weight: 0.22});
+    this.userFlowPreviewPanel = userPreviewRow.addPanel({
+      backgroundColor: '#0f172acc',
+      height: 0.94,
+      width: 0.94,
+      showEdge: true,
+    });
+    const userPreviewGrid = this.userFlowPreviewPanel.addGrid();
+    userPreviewGrid.addRow({weight: 1.0});
+    this.userFlowPreviewImage = userPreviewGrid.addImage({
+      src: '',
+      paddingX: 0.04,
+      paddingY: 0.04,
+    });
+    this.userFlowPreviewPanel.visible = false;
+    this.userFlowPreviewPanel.updateLayouts();
+
+    this.userFlowButtons = [];
+    for (let rowIndex = 0; rowIndex < 4; rowIndex++) {
+      const row = userGrid.addRow({weight: 0.1});
+      for (let colIndex = 0; colIndex < 2; colIndex++) {
+        const button = row.addCol({weight: 0.5}).addTextButton({
+          text: '',
+          backgroundColor: '#1f2937',
+          fontColor: '#ffffff',
+          fontSizeDp: 15,
+          opacity: 0.98,
+          width: 0.88,
+          height: 0.58,
+        });
+        button.visible = false;
+        button.onTriggered = () => {};
+        this.userFlowButtons.push(button);
+      }
+    }
+
+    userGrid.addRow({weight: 0.1}).addText({
+      text: 'Use ?debugUi=true to open the full operator panels.',
+      fontSizeDp: 12,
+      fontColor: '#94a3b8',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    this.userFlowPanel.updateLayouts();
+  }
+
+  setDebugPanelVisibility(visible) {
+    this.mainPanel.visible = visible;
+    this.selectionPanel.visible = visible;
+    this.transformPanel.visible = visible;
+    this.libraryPanel.visible = visible;
+    this.userFlowPanel.visible = !visible;
+  }
+
+  configureUserFlowButton(index, {
+    text = '',
+    backgroundColor = '#1f2937',
+    onTriggered = () => {},
+    visible = true,
+  } = {}) {
+    const button = this.userFlowButtons?.[index];
+    if (!button) return;
+    button.text = text;
+    button.backgroundColor = backgroundColor;
+    button.onTriggered = onTriggered;
+    button.visible = visible;
+  }
+
+  getActiveAssetOrdinalText() {
+    if (!this.workspaceState.assets.length || !this.activeAssetId) {
+      return 'No active asset.';
+    }
+    const index = this.workspaceState.assets.findIndex(
+      (asset) => asset.assetId === this.activeAssetId
+    );
+    return index >= 0
+      ? `Asset ${index + 1}/${this.workspaceState.assets.length}: ${this.activeAssetId}`
+      : `Active asset: ${this.activeAssetId}`;
+  }
+
+  updateUserFlowUi() {
+    if (this.debugUiEnabled || !this.userFlowPanel) {
+      return;
+    }
+
+    const assetCount = this.workspaceState.assets.length;
+    const hasAssets = assetCount > 0;
+    const activeAssetInfo = this.getActiveAssetOrdinalText();
+    const waitingForConfirm =
+      this.userFlowMode === 'generate' && this.userFlowAwaitingPromptConfirmation;
+
+    for (let i = 0; i < this.userFlowButtons.length; i++) {
+      this.configureUserFlowButton(i, {visible: false});
+    }
+
+    if (this.userFlowMode === 'generate') {
+      this.userFlowModeText.text = 'Generate';
+      this.userFlowDetailText.text = waitingForConfirm
+        ? `Prompt: ${this.currentPrompt || '(empty)'}\nSay yes or no, or use the buttons below.`
+        : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
+
+      this.configureUserFlowButton(0, {
+        text: this.isRecordingPrompt
+          ? 'Stop'
+          : waitingForConfirm
+            ? 'Say Yes/No'
+            : 'Push To Talk',
+        backgroundColor: '#9a3412',
+        onTriggered: () => this.handleUserFlowRecordAction(),
+      });
+      this.configureUserFlowButton(1, {
+        text: 'Confirm',
+        backgroundColor: waitingForConfirm ? '#2563eb' : '#1f2937',
+        onTriggered: () => this.confirmUserFlowGeneratePrompt(),
+        visible: waitingForConfirm,
+      });
+      this.configureUserFlowButton(2, {
+        text: 'Cancel',
+        backgroundColor: '#6b7280',
+        onTriggered: () => this.cancelUserFlowGeneratePrompt(),
+        visible: waitingForConfirm,
+      });
+      this.configureUserFlowButton(3, {
+        text: 'Next',
+        backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
+        onTriggered: () => this.enterSegmentMode(),
+      });
+    } else if (this.userFlowMode === 'segment') {
+      this.userFlowModeText.text = 'Segment';
+      this.userFlowDetailText.text =
+        `${activeAssetInfo}\nKept-only view stays on. Use the selection tool to mark what to keep or discard.`;
+
+      this.configureUserFlowButton(0, {
+        text: this.isSelectionMode ? 'Select: ON' : 'Select: OFF',
+        backgroundColor: this.isSelectionMode ? '#0f766e' : '#374151',
+        onTriggered: () => this.toggleSelectionMode(),
+      });
+      this.configureUserFlowButton(1, {
+        text: this.selectionController?.getPaintMode?.() === 'keep' ? 'Mode: Keep' : 'Mode: Drop',
+        backgroundColor: this.selectionController?.getPaintMode?.() === 'keep' ? '#166534' : '#991b1b',
+        onTriggered: () => this.togglePaintMode(),
+      });
+      this.configureUserFlowButton(2, {
+        text: 'Previous',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(-1),
+      });
+      this.configureUserFlowButton(3, {
+        text: 'Next',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(1),
+      });
+      this.configureUserFlowButton(4, {
+        text: 'Save Sel',
+        backgroundColor: '#065f46',
+        onTriggered: () => this.saveUserFlowWorkspaceSelection(),
+      });
+      this.configureUserFlowButton(5, {
+        text: 'Load Sel',
+        backgroundColor: '#1d4ed8',
+        onTriggered: () => this.loadUserFlowWorkspaceSelection(),
+      });
+      this.configureUserFlowButton(7, {
+        text: 'To Compose',
+        backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
+        onTriggered: () => this.enterComposeMode(),
+      });
+    } else if (this.userFlowMode === 'compose') {
+      this.userFlowModeText.text = 'Compose';
+      this.userFlowDetailText.text =
+        `${activeAssetInfo}\nTransform one asset at a time with the gizmo, then compose the current workspace.`;
+
+      this.configureUserFlowButton(0, {
+        text: 'Previous',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(-1),
+      });
+      this.configureUserFlowButton(1, {
+        text: 'Next',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(1),
+      });
+      this.configureUserFlowButton(6, {
+        text: 'Compose',
+        backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
+        onTriggered: () => this.composeUserFlowWorkspace(),
+      });
+    }
   }
 
   createPromptKeyboard() {
@@ -874,6 +1120,15 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     recognizer.addEventListener('result', (event) => {
       const {transcript, isFinal} = event;
+      if (this.recordingPurpose === 'confirmation') {
+        this.confirmationTranscript = transcript || this.confirmationTranscript;
+        if (isFinal) {
+          this.isRecordingPrompt = false;
+          this.updateRecordButton();
+        }
+        return;
+      }
+
       this.currentPrompt = transcript || this.currentPrompt;
       this.workspaceState.prompt = this.currentPrompt;
       if (this.promptKeyboard) {
@@ -883,20 +1138,36 @@ export class Sam3dWorkspaceScene extends xb.Script {
       if (isFinal) {
         this.isRecordingPrompt = false;
         this.updateRecordButton();
-        this.setStatus('Prompt captured. You can generate now.');
+        if (this.debugUiEnabled || this.userFlowMode !== 'generate') {
+          this.setStatus('Prompt captured. You can generate now.');
+        }
       }
     });
 
     recognizer.addEventListener('error', (event) => {
       this.isRecordingPrompt = false;
+      this.recordingPurpose = 'prompt';
       this.updateRecordButton();
-      this.updateMicDiagnostics(`Speech error: ${event.error}`);
-      this.setStatus(`Speech error: ${event.error}`);
+      this.updateMicDiagnostics('Speech error: ' + event.error);
+      this.setStatus('Speech error: ' + event.error);
     });
 
-    recognizer.addEventListener('end', () => {
+    recognizer.addEventListener('end', async () => {
+      const finishedPurpose = this.recordingPurpose;
+      const confirmationTranscript = this.confirmationTranscript;
       this.isRecordingPrompt = false;
+      this.recordingPurpose = 'prompt';
       this.updateRecordButton();
+
+      if (this.debugUiEnabled || this.userFlowMode !== 'generate') {
+        return;
+      }
+
+      if (finishedPurpose === 'prompt') {
+        await this.handleUserFlowPromptRecordingEnded();
+      } else if (finishedPurpose === 'confirmation') {
+        this.handleUserFlowConfirmationTranscript(confirmationTranscript);
+      }
     });
   }
 
@@ -916,6 +1187,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       : '';
     this.promptText.text =
       `Prompt: ${prompt}\nAssets: ${assetCount}${activeSuffix}${selectionSuffix}`;
+    this.updateUserFlowUi();
   }
 
   updateMicDiagnostics(extraMessage = '') {
@@ -936,8 +1208,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   updateRecordButton() {
-    if (!this.recordButton) return;
-    this.recordButton.text = this.isRecordingPrompt ? 'Stop' : 'Record';
+    if (this.recordButton) {
+      this.recordButton.text = this.isRecordingPrompt ? 'Stop' : 'Record';
+    }
+    this.updateUserFlowUi();
   }
 
   updateSelectionUi() {
@@ -980,6 +1254,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
           : '#1d4ed8'
         : '#1f2937';
     }
+    this.updateUserFlowUi();
   }
 
   updateTransformUi() {
@@ -1018,6 +1293,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.rotatePositiveButton) this.rotatePositiveButton.backgroundColor = hasTarget ? "#b45309" : "#1f2937";
     if (this.scaleDownButton) this.scaleDownButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
     if (this.scaleUpButton) this.scaleUpButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
+    this.updateUserFlowUi();
   }
 
   getActiveTransformTarget() {
@@ -1101,6 +1377,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.statusText) {
       this.statusText.text = text;
     }
+    if (this.userFlowStatusText) {
+      this.userFlowStatusText.text = text;
+    }
   }
 
   togglePromptEditor() {
@@ -1170,6 +1449,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.lastScreenshotDataUrl = image;
       this.workspaceState.lastScreenshotDataUrl = image;
       this.previewImage.load(image);
+      if (this.userFlowPreviewImage) {
+        this.userFlowPreviewImage.load(image);
+      }
+      this.showUserFlowCapturePreview();
       this.setStatus(
         USE_DESKTOP_GEMINI_CAPTURE
           ? 'Loaded test capture from assets/desktop_gemini.png.'
@@ -1185,7 +1468,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
-  togglePromptRecording() {
+  togglePromptRecording(purpose = 'prompt') {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
       this.setStatus('Speech recognition is unavailable in this browser.');
@@ -1196,14 +1479,116 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.isRecordingPrompt) {
       recognizer.stop();
       this.isRecordingPrompt = false;
-      this.setStatus('Stopped listening for prompt.');
+      this.setStatus(
+        this.recordingPurpose === 'confirmation'
+          ? 'Stopped listening for confirmation.'
+          : 'Stopped listening for prompt.'
+      );
     } else {
+      this.recordingPurpose = purpose;
+      this.confirmationTranscript = '';
       this.isRecordingPrompt = true;
       this.updateMicDiagnostics('Speech recognizer start requested.');
-      this.setStatus('Listening for prompt...');
+      this.setStatus(
+        purpose === 'confirmation'
+          ? 'Listening for yes or no...'
+          : 'Listening for prompt...'
+      );
       recognizer.start();
     }
     this.updateRecordButton();
+  }
+
+  handleUserFlowRecordAction() {
+    if (this.userFlowMode !== 'generate') {
+      this.togglePromptRecording();
+      return;
+    }
+
+    this.togglePromptRecording(
+      this.userFlowAwaitingPromptConfirmation ? 'confirmation' : 'prompt'
+    );
+  }
+
+  showUserFlowCapturePreview() {
+    if (this.debugUiEnabled || !this.userFlowPreviewPanel || !this.lastScreenshotDataUrl) {
+      return;
+    }
+
+    this.userFlowPreviewPanel.visible = true;
+    if (this.userCapturePreviewTimer) {
+      clearTimeout(this.userCapturePreviewTimer);
+    }
+    this.userCapturePreviewTimer = setTimeout(() => {
+      this.hideUserFlowCapturePreview();
+    }, USER_CAPTURE_PREVIEW_MS);
+  }
+
+  hideUserFlowCapturePreview() {
+    if (this.userCapturePreviewTimer) {
+      clearTimeout(this.userCapturePreviewTimer);
+      this.userCapturePreviewTimer = null;
+    }
+    if (this.userFlowPreviewPanel) {
+      this.userFlowPreviewPanel.visible = false;
+    }
+  }
+
+  async handleUserFlowPromptRecordingEnded() {
+    if (this.debugUiEnabled || this.userFlowMode !== 'generate') {
+      return;
+    }
+    if (!this.currentPrompt) {
+      this.setStatus('No prompt was captured. Push to talk and try again.');
+      return;
+    }
+
+    await this.captureScreenshot();
+    this.userFlowAwaitingPromptConfirmation = true;
+    this.updateUserFlowUi();
+    this.setStatus('I heard "' + this.currentPrompt + '". Say yes or no, or use Confirm / Cancel.');
+  }
+
+  handleUserFlowConfirmationTranscript(transcript = '') {
+    const normalized = (transcript || '').trim().toLowerCase();
+    if (!normalized) {
+      this.setStatus('Confirmation was not understood. Use Confirm / Cancel or say yes / no.');
+      return;
+    }
+
+    if (/\b(yes|yeah|yep|sure|confirm|go ahead|do it)\b/.test(normalized)) {
+      this.confirmUserFlowGeneratePrompt();
+      return;
+    }
+
+    if (/\b(no|nope|cancel|not sure|retry|again)\b/.test(normalized)) {
+      this.cancelUserFlowGeneratePrompt();
+      return;
+    }
+
+    this.setStatus('Confirmation was unclear. Use Confirm / Cancel or say yes / no.');
+  }
+
+  async confirmUserFlowGeneratePrompt() {
+    if (!this.userFlowAwaitingPromptConfirmation) {
+      this.setStatus('Push to talk first to capture a prompt.');
+      return;
+    }
+
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.updateUserFlowUi();
+    await this.generateAsset();
+  }
+
+  cancelUserFlowGeneratePrompt() {
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.confirmationTranscript = '';
+    this.updateUserFlowUi();
+    this.setStatus('Prompt cancelled. Push to talk for a new try.');
+  }
+
+  shouldEnableTransformTools() {
+    return this.debugUiEnabled || this.userFlowMode === 'compose';
   }
 
   async runMicCapabilityTest() {
@@ -1622,7 +2007,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const activeModel = this.activeAssetId ? this.assetInstances.get(this.activeAssetId) : null;
     this.transformGizmoController.setTarget(activeModel || null, {
-      enabled: !!activeModel && !this.isSelectionMode,
+      enabled: !!activeModel && !this.isSelectionMode && this.shouldEnableTransformTools(),
     });
   }
 
@@ -1636,7 +2021,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
     }
 
-    this.transformGizmoController?.setEnabled(!!this.activeAssetId && !this.isSelectionMode);
+    this.transformGizmoController?.setEnabled(
+      !!this.activeAssetId && !this.isSelectionMode && this.shouldEnableTransformTools()
+    );
   }
 
   togglePaintMode() {
@@ -1661,7 +2048,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     const activeAssetRecord = this.getAssetRecord(this.activeAssetId);
-    if (!this.isSelectionMode && activeAssetRecord?.viewMode === 'kept-only') {
+    if (
+      !this.isSelectionMode &&
+      activeAssetRecord?.viewMode === 'kept-only' &&
+      this.userFlowMode !== 'segment'
+    ) {
       this.setAssetViewMode(this.activeAssetId, 'full');
     }
 
@@ -1700,6 +2091,145 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.selectionController.clearSelection();
     this.updateSelectionUi();
     this.setStatus(`Selection reset for ${this.activeAssetId}. Whole asset is implicitly kept again.`);
+  }
+
+  async saveUserFlowWorkspaceOverwrite({createIfNeeded = false} = {}) {
+    if (!this.userFlowWorkspaceId) {
+      if (!createIfNeeded) {
+        this.setStatus('No session workspace exists yet. Finish generate mode first.');
+        return null;
+      }
+      this.userFlowWorkspaceId = this.generateWorkspaceSnapshotId();
+    }
+
+    const workspace = this.buildWorkspaceSnapshot();
+    this.apiClient.workspaceId = this.userFlowWorkspaceId;
+    this.refreshWorkspaceStatusText();
+    return await this.apiClient.saveWorkspace(workspace);
+  }
+
+  async saveUserFlowWorkspaceSelection() {
+    const saved = await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
+    if (!saved) {
+      return;
+    }
+    this.setStatus('Selection workspace saved.');
+  }
+
+  async loadUserFlowWorkspaceSelection() {
+    if (!this.userFlowWorkspaceId) {
+      this.setStatus('No saved workspace exists for this session yet.');
+      return;
+    }
+
+    this.apiClient.workspaceId = this.userFlowWorkspaceId;
+    this.refreshWorkspaceStatusText();
+    await this.loadWorkspace();
+    this.userFlowMode = 'segment';
+    this.applySegmentModeDefaults();
+    this.setStatus('Latest saved selections restored for this session.');
+  }
+
+  applySegmentModeDefaults() {
+    if (!this.workspaceState.assets.length) {
+      this.isSelectionMode = false;
+      this.selectionController?.setDrawMode(false);
+      this.updateSelectionUi();
+      return;
+    }
+
+    for (const asset of this.workspaceState.assets) {
+      this.setAssetViewMode(asset.assetId, 'kept-only');
+    }
+    this.setActiveAsset(this.workspaceState.assets[0].assetId);
+    this.isSelectionMode = true;
+    this.selectionController?.setDrawMode(true);
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+  }
+
+  async enterSegmentMode() {
+    if (!this.workspaceState.assets.length) {
+      this.setStatus('Generate at least one asset before continuing to segment mode.');
+      return;
+    }
+
+    await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.userFlowMode = 'segment';
+    this.hideUserFlowCapturePreview();
+    this.applySegmentModeDefaults();
+    this.updateUserFlowUi();
+    this.setStatus('Segment mode started. Choose what to keep on each asset.');
+  }
+
+  applyComposeModeDefaults({preserveActive = false} = {}) {
+    this.isSelectionMode = false;
+    this.selectionController?.setDrawMode(false);
+    if (this.workspaceState.assets.length) {
+      const nextActiveAssetId = preserveActive && this.activeAssetId
+        ? this.activeAssetId
+        : this.workspaceState.assets[0].assetId;
+      this.setActiveAsset(nextActiveAssetId);
+    }
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+  }
+
+  async enterComposeMode() {
+    if (!this.workspaceState.assets.length) {
+      this.setStatus('No assets are available for compose mode.');
+      return;
+    }
+
+    await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
+    this.userFlowMode = 'compose';
+    this.applyComposeModeDefaults();
+    this.updateUserFlowUi();
+    this.setStatus('Compose mode started. Transform one asset at a time, then compose the workspace.');
+  }
+
+  async composeUserFlowWorkspace() {
+    if (!this.workspaceState.assets.length) {
+      this.setStatus('No assets are available to compose.');
+      return;
+    }
+
+    if (this.currentJobId) {
+      this.setStatus('Another backend job is already running.');
+      return;
+    }
+
+    await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
+    const workspaceId = this.userFlowWorkspaceId;
+
+    try {
+      const job = await this.apiClient.createComposeJob({
+        sessionId: this.sessionId,
+        workspaceId,
+        compose: {
+          normalizeToDecoderGrid: false,
+        },
+      });
+
+      this.currentJobId = job.jobId;
+      this.setStatus('Compose job queued for ' + workspaceId + ': ' + job.jobId);
+      this.startPollingJob(job.jobId, {
+        jobLabel: 'Compose',
+        onCompleted: async (update) => {
+          await this.loadGeneratedAsset(update.asset, 'Composed');
+          this.userFlowMode = 'compose';
+          this.applyComposeModeDefaults({preserveActive: true});
+          this.refreshAssetCatalog().catch((error) => {
+            console.warn('Failed to refresh asset catalog after compose.', error);
+          });
+        },
+        failedMessage: 'Compose failed.',
+      });
+    } catch (error) {
+      console.error('Failed to start compose job.', error);
+      this.setStatus('Compose request failed.');
+    }
   }
   refreshCatalogUi() {
     if (!this.catalogText) {
@@ -2302,6 +2832,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.lastScreenshotDataUrl = this.workspaceState.lastScreenshotDataUrl;
     this.previewImage.load(this.lastScreenshotDataUrl || '');
+    if (this.userFlowPreviewImage) {
+      this.userFlowPreviewImage.load(this.lastScreenshotDataUrl || '');
+    }
 
     const savedAssets = saved.workspace.assets || [];
     for (const savedAsset of savedAssets) {
@@ -2359,6 +2892,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.selectionController?.detach();
     this.lastScreenshotDataUrl = '';
     this.previewImage.load('');
+    this.hideUserFlowCapturePreview();
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.recordingPurpose = 'prompt';
+    this.confirmationTranscript = '';
+    this.userFlowWorkspaceId = null;
+    if (!this.debugUiEnabled) {
+      this.userFlowMode = 'generate';
+    }
     this.workspaceState = this.createEmptyWorkspaceState();
     this.workspaceState.assets = [];
     if (this.promptKeyboard) {
@@ -2403,6 +2944,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.pollHandle = null;
     }
     this.pollGeneration++;
+    this.hideUserFlowCapturePreview();
     this.transformGizmoController?.dispose();
     this.transformGizmoController = null;
     this.selectionController?.dispose();
