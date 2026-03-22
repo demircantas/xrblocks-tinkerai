@@ -147,16 +147,18 @@ For each asset, the backend currently does:
 1. Load source latent coords and feats.
 2. Load persisted source mesh vertices and faces.
 3. Fit the source mesh into the source latent voxel space by matching centers and isotropic max-span scale.
-4. Convert the frontend `transformMatrix` from source-mesh space into that fitted voxel-space frame.
-5. Filter the source mesh by selected vertices.
-6. Propagate selection from selected mesh vertices to source latent voxels using `proximity`.
-7. Apply the same transformed-space matrix to:
+4. Before that fit, convert the cached source mesh from the visible/export mesh frame into decoder-axis space using the current backend axis map:
+   - `[x, y, z] -> [x, -z, y]`
+5. Convert the frontend `transformMatrix` from source-mesh space into that fitted voxel-space frame using the same frame conversion.
+6. Filter the source mesh by selected vertices.
+7. Propagate selection from selected mesh vertices to source latent voxels using `proximity`.
+8. Apply the same transformed-space matrix to:
    - selected source mesh vertices
    - kept source latent voxel positions
-8. Stack all transformed source meshes from all assets.
-9. Voxelize the stacked transformed mesh surface to create a new composed voxel set.
-10. Project latent feature vectors from transformed old voxels to those new composed voxels.
-11. Decode only the final combined latent field.
+9. Stack all transformed source meshes from all assets.
+10. Voxelize the stacked transformed mesh surface to create a new composed voxel set.
+11. Project latent feature vectors from transformed old voxels to those new composed voxels.
+12. Decode only the final combined latent field.
 
 This is structurally similar to the compose notebook:
 
@@ -238,6 +240,7 @@ For each source asset in the current default path:
 
 ```text
 persisted source mesh
+    -> converted from cached/export mesh frame into decoder-axis space
     -> fitted into source latent voxel space
     -> selected by kept mesh vertices
     -> transformed by frontend transformMatrix converted into compose working space
