@@ -15,6 +15,10 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
+const TRANSFORM_TRANSLATE_STEP = 0.05;
+const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
+const TRANSFORM_SCALE_MULTIPLIER = 1.1;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -415,6 +419,185 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.selectionPanel.updateLayouts();
 
+    this.transformPanel = new xb.SpatialPanel({
+      width: 0.44,
+      height: 0.62,
+      backgroundColor: '#0f172aEE',
+      useDefaultPosition: false,
+    });
+    this.transformPanel.isRoot = true;
+    this.transformPanel.position.set(-0.01, xb.user.height - 0.22, -0.82);
+    this.add(this.transformPanel);
+
+    const transformGrid = this.transformPanel.addGrid();
+    transformGrid.addRow({weight: 0.12}).addText({
+      text: 'Transform',
+      fontSizeDp: 22,
+      fontColor: '#e2e8f0',
+    });
+
+    this.transformAssetText = transformGrid.addRow({weight: 0.16}).addText({
+      text: 'No active asset selected.',
+      fontSizeDp: 14,
+      fontColor: '#cbd5e1',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.92,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    const activeAssetRow = transformGrid.addRow({weight: 0.16});
+    this.transformPrevAssetButton = activeAssetRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Prev Asset',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
+    });
+    this.transformPrevAssetButton.onTriggered = () => this.stepActiveAsset(-1);
+
+    this.transformNextAssetButton = activeAssetRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Next Asset',
+      backgroundColor: '#334155',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
+    });
+    this.transformNextAssetButton.onTriggered = () => this.stepActiveAsset(1);
+
+    const translateRow = transformGrid.addRow({weight: 0.16});
+    this.moveXNegativeButton = translateRow.addCol({weight: 0.25}).addTextButton({
+      text: 'X-',
+      backgroundColor: '#1d4ed8',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveXNegativeButton.onTriggered = () => this.translateActiveAsset(-TRANSFORM_TRANSLATE_STEP, 0, 0);
+
+    this.moveXPositiveButton = translateRow.addCol({weight: 0.25}).addTextButton({
+      text: 'X+',
+      backgroundColor: '#1d4ed8',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveXPositiveButton.onTriggered = () => this.translateActiveAsset(TRANSFORM_TRANSLATE_STEP, 0, 0);
+
+    this.moveZNegativeButton = translateRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Z-',
+      backgroundColor: '#0f766e',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveZNegativeButton.onTriggered = () => this.translateActiveAsset(0, 0, -TRANSFORM_TRANSLATE_STEP);
+
+    this.moveZPositiveButton = translateRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Z+',
+      backgroundColor: '#0f766e',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveZPositiveButton.onTriggered = () => this.translateActiveAsset(0, 0, TRANSFORM_TRANSLATE_STEP);
+
+    const transformRow = transformGrid.addRow({weight: 0.16});
+    this.moveYPositiveButton = transformRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Y+',
+      backgroundColor: '#7c3aed',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveYPositiveButton.onTriggered = () => this.translateActiveAsset(0, TRANSFORM_TRANSLATE_STEP, 0);
+
+    this.moveYNegativeButton = transformRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Y-',
+      backgroundColor: '#7c3aed',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.moveYNegativeButton.onTriggered = () => this.translateActiveAsset(0, -TRANSFORM_TRANSLATE_STEP, 0);
+
+    this.rotateNegativeButton = transformRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Yaw -',
+      backgroundColor: '#b45309',
+      fontColor: '#ffffff',
+      fontSizeDp: 14,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.rotateNegativeButton.onTriggered = () => this.rotateActiveAsset(-TRANSFORM_ROTATE_STEP);
+
+    this.rotatePositiveButton = transformRow.addCol({weight: 0.25}).addTextButton({
+      text: 'Yaw +',
+      backgroundColor: '#b45309',
+      fontColor: '#ffffff',
+      fontSizeDp: 14,
+      opacity: 0.98,
+      width: 0.76,
+      height: 0.56,
+    });
+    this.rotatePositiveButton.onTriggered = () => this.rotateActiveAsset(TRANSFORM_ROTATE_STEP);
+
+    const scaleRow = transformGrid.addRow({weight: 0.16});
+    this.scaleDownButton = scaleRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Scale -',
+      backgroundColor: '#475569',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
+    });
+    this.scaleDownButton.onTriggered = () => this.scaleActiveAsset(1 / TRANSFORM_SCALE_MULTIPLIER);
+
+    this.scaleUpButton = scaleRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Scale +',
+      backgroundColor: '#475569',
+      fontColor: '#ffffff',
+      fontSizeDp: 15,
+      opacity: 0.98,
+      width: 0.88,
+      height: 0.58,
+    });
+    this.scaleUpButton.onTriggered = () => this.scaleActiveAsset(TRANSFORM_SCALE_MULTIPLIER);
+
+    transformGrid.addRow({weight: 0.14}).addText({
+      text: 'Wrapper-only debug transforms: world-space X/Y/Z, world-yaw, uniform scale.',
+      fontSizeDp: 12,
+      fontColor: '#94a3b8',
+      anchorX: 'left',
+      anchorY: 'top',
+      textAlign: 'left',
+      maxWidth: 0.9,
+      paddingX: 0.03,
+      paddingY: 0.01,
+    });
+
+    this.transformPanel.updateLayouts();
+
     this.libraryPanel = new xb.SpatialPanel({
       width: 0.48,
       height: 0.98,
@@ -777,6 +960,121 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  updateTransformUi() {
+    if (!this.transformAssetText) {
+      return;
+    }
+
+    const assetCount = this.workspaceState.assets.length;
+    const activeIndex = this.workspaceState.assets.findIndex(
+      (asset) => asset.assetId === this.activeAssetId
+    );
+    const hasTarget = !!this.activeAssetId && !!this.assetInstances.get(this.activeAssetId);
+
+    if (hasTarget && activeIndex >= 0) {
+      this.transformAssetText.text = 'Active Asset ' + (activeIndex + 1) + '/' + assetCount + ': ' + this.activeAssetId;
+    } else if (assetCount > 0) {
+      this.transformAssetText.text = 'Loaded assets: ' + assetCount + '. Choose Prev/Next Asset to target one.';
+    } else {
+      this.transformAssetText.text = 'No active asset selected.';
+    }
+
+    const cycleEnabled = assetCount > 1;
+    if (this.transformPrevAssetButton) {
+      this.transformPrevAssetButton.backgroundColor = cycleEnabled ? '#334155' : '#1f2937';
+    }
+    if (this.transformNextAssetButton) {
+      this.transformNextAssetButton.backgroundColor = cycleEnabled ? '#334155' : '#1f2937';
+    }
+    if (this.moveXNegativeButton) this.moveXNegativeButton.backgroundColor = hasTarget ? "#1d4ed8" : "#1f2937";
+    if (this.moveXPositiveButton) this.moveXPositiveButton.backgroundColor = hasTarget ? "#1d4ed8" : "#1f2937";
+    if (this.moveZNegativeButton) this.moveZNegativeButton.backgroundColor = hasTarget ? "#0f766e" : "#1f2937";
+    if (this.moveZPositiveButton) this.moveZPositiveButton.backgroundColor = hasTarget ? "#0f766e" : "#1f2937";
+    if (this.moveYPositiveButton) this.moveYPositiveButton.backgroundColor = hasTarget ? "#7c3aed" : "#1f2937";
+    if (this.moveYNegativeButton) this.moveYNegativeButton.backgroundColor = hasTarget ? "#7c3aed" : "#1f2937";
+    if (this.rotateNegativeButton) this.rotateNegativeButton.backgroundColor = hasTarget ? "#b45309" : "#1f2937";
+    if (this.rotatePositiveButton) this.rotatePositiveButton.backgroundColor = hasTarget ? "#b45309" : "#1f2937";
+    if (this.scaleDownButton) this.scaleDownButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
+    if (this.scaleUpButton) this.scaleUpButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
+  }
+
+  getActiveTransformTarget() {
+    if (!this.activeAssetId) {
+      return null;
+    }
+    return this.assetInstances.get(this.activeAssetId) || null;
+  }
+
+  stepActiveAsset(delta) {
+    const assetCount = this.workspaceState.assets.length;
+    if (!assetCount) {
+      this.setStatus('Load or generate an asset before switching the active target.');
+      return;
+    }
+
+    const currentIndex = Math.max(
+      0,
+      this.workspaceState.assets.findIndex((asset) => asset.assetId === this.activeAssetId)
+    );
+    const nextIndex = (currentIndex + delta + assetCount) % assetCount;
+    const nextAsset = this.workspaceState.assets[nextIndex];
+    if (!nextAsset) {
+      return;
+    }
+
+    this.setActiveAsset(nextAsset.assetId);
+    this.setStatus('Active asset set to ' + nextAsset.assetId + '.');
+  }
+
+  updateActiveAssetTransformRecord() {
+    const model = this.getActiveTransformTarget();
+    const assetRecord = this.activeAssetId ? this.getAssetRecord(this.activeAssetId) : null;
+    if (!model || !assetRecord) {
+      return;
+    }
+
+    this.upsertAssetRecord({
+      ...assetRecord,
+      transformMatrix: this.getPersistedTransformMatrix(
+        model,
+        normalizeTransformMatrix(assetRecord)
+      ),
+    });
+  }
+
+  applyActiveAssetTransform(mutator, statusText) {
+    const model = this.getActiveTransformTarget();
+    if (!model || !this.activeAssetId) {
+      this.setStatus('Select an active asset before applying transforms.');
+      return;
+    }
+
+    mutator(model);
+    model.updateMatrix();
+    model.updateMatrixWorld(true);
+    this.updateActiveAssetTransformRecord();
+    this.setStatus(statusText.replace('{assetId}', this.activeAssetId));
+  }
+
+  translateActiveAsset(dx, dy, dz) {
+    this.applyActiveAssetTransform((model) => {
+      model.position.add(new THREE.Vector3(dx, dy, dz));
+    }, 'Moved {assetId} by (' + dx.toFixed(2) + ', ' + dy.toFixed(2) + ', ' + dz.toFixed(2) + ').');
+  }
+
+  rotateActiveAsset(deltaRadians) {
+    this.applyActiveAssetTransform((model) => {
+      model.rotateOnWorldAxis(WORLD_UP, deltaRadians);
+    }, 'Rotated {assetId} by ' + THREE.MathUtils.radToDeg(deltaRadians).toFixed(0) + ' degrees around world Y.');
+  }
+
+  scaleActiveAsset(multiplier) {
+    this.applyActiveAssetTransform((model) => {
+      const nextScale = Math.max(0.01, model.scale.x * multiplier);
+      model.scale.setScalar(nextScale);
+    }, 'Scaled {assetId} by ' + multiplier.toFixed(2) + 'x.');
+  }
+
   setStatus(text) {
     if (this.statusText) {
       this.statusText.text = text;
@@ -921,6 +1219,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.activeAssetId = assetId;
     this.syncSelectionController();
     this.refreshPromptText();
+    this.updateTransformUi();
   }
 
   getAssetRecord(assetId) {
@@ -938,6 +1237,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
     this.refreshPromptText();
     this.updateSelectionUi();
+    this.updateTransformUi();
   }
 
   removeAssetInstance(assetId) {
@@ -961,6 +1261,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.activeAssetId === assetId) {
       this.activeAssetId = null;
     }
+
+    this.updateTransformUi();
   }
 
   clearAssetInstances() {
@@ -1288,15 +1590,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   applyWorkspaceInteractionPolicy() {
-    const allowModelInteraction =
-      !this.isSelectionMode || !this.selectionController?.hasTarget();
-
     for (const model of this.assetInstances.values()) {
-      model.draggable = allowModelInteraction;
-      model.rotatable = allowModelInteraction;
-      model.scalable = allowModelInteraction;
+      model.draggable = false;
+      model.rotatable = false;
+      model.scalable = false;
       model.traverse((node) => {
-        node.ignoreReticleRaycast = !allowModelInteraction;
+        node.ignoreReticleRaycast = true;
       });
     }
   }
