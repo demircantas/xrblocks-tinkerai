@@ -310,3 +310,11 @@ The intended long-term contract is:
 - backend decodes only the final combined latent field
 
 That is the contract the frontend agent should optimize for.
+
+# Demircan's observations
+- Is the recentering step that the modelviewer does possibly messing with the final transforms that we return to the frontend?
+- The bounding box command possibly introduces variable offsets in the transforms. We should bring glbs "as is" for debug testing and to keep everything as simple as possible. Once we fix the projection errors, we can reintroduce features as necessary.
+- We should change the scale values to `1.0` from `0.9`.
+- `findModelPoseRoot` also seems unnecessary in our case. The generated models should not include any pose hierarchy. We should double-check this.
+- We should remove all frontend recentering / grounding and normalization. It's fine if the models end up too big or small at this phase. We want to eliminate all culprits.
+- The asset dependent way that ModelViewer changes GLBs makes it difficult to reverse engineer their transforms. We should ideally need no reverse-engineering whatsoever.
