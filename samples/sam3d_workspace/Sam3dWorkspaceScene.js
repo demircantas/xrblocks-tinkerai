@@ -5,6 +5,7 @@ import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 
 import {Sam3dApiClient} from './Sam3dApiClient.js';
 import {MeshSelectionController} from './MeshSelectionController.js';
+import {TransformGizmoController} from './TransformGizmoController.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
@@ -75,6 +76,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.workspaceCatalogIndex = 0;
     this.activeAssetId = null;
     this.selectionController = null;
+    this.transformGizmoController = null;
     this.isSelectionMode = false;
     this.environmentTarget = null;
     this.environmentTexture = null;
@@ -98,6 +100,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.createWorkspaceUI();
     this.createPromptKeyboard();
     this.createSelectionController();
+    this.createTransformGizmoController();
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
     this.refreshPromptText();
@@ -841,6 +844,25 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
   }
 
+  createTransformGizmoController() {
+    this.transformGizmoController = new TransformGizmoController({
+      sceneRoot: this,
+      onTransformChanged: (model) => {
+        const assetId = model?.userData?.assetId;
+        if (!assetId) return;
+        const assetRecord = this.getAssetRecord(assetId);
+        if (!assetRecord) return;
+        assetRecord.transformMatrix = this.getPersistedTransformMatrix(
+          model,
+          normalizeTransformMatrix(assetRecord)
+        );
+        this.refreshPromptText();
+        this.updateTransformUi();
+      },
+      onStatus: (text) => this.setStatus(text),
+    });
+  }
+
   bindSpeechRecognizer() {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
@@ -1218,6 +1240,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   setActiveAsset(assetId) {
     this.activeAssetId = assetId;
     this.syncSelectionController();
+    this.syncTransformGizmo();
     this.refreshPromptText();
     this.updateTransformUi();
   }
@@ -1238,6 +1261,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshPromptText();
     this.updateSelectionUi();
     this.updateTransformUi();
+    this.syncTransformGizmo();
   }
 
   removeAssetInstance(assetId) {
@@ -1263,6 +1287,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     this.updateTransformUi();
+    this.syncTransformGizmo();
   }
 
   clearAssetInstances() {
@@ -1270,6 +1295,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.removeAssetInstance(assetId);
     }
     this.syncSelectionController();
+    this.syncTransformGizmo();
   }
 
   getDefaultPlacementForIndex(index) {
@@ -1589,6 +1615,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateSelectionUi();
   }
 
+  syncTransformGizmo() {
+    if (!this.transformGizmoController) {
+      return;
+    }
+
+    const activeModel = this.activeAssetId ? this.assetInstances.get(this.activeAssetId) : null;
+    this.transformGizmoController.setTarget(activeModel || null, {
+      enabled: !!activeModel && !this.isSelectionMode,
+    });
+  }
+
   applyWorkspaceInteractionPolicy() {
     for (const model of this.assetInstances.values()) {
       model.draggable = false;
@@ -1598,6 +1635,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
         node.ignoreReticleRaycast = true;
       });
     }
+
+    this.transformGizmoController?.setEnabled(!!this.activeAssetId && !this.isSelectionMode);
   }
 
   togglePaintMode() {
@@ -2333,18 +2372,28 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   onSelectStart(event) {
+    if (this.transformGizmoController?.onSelectStart(event)) {
+      return;
+    }
     this.selectionController?.onSelectStart(event);
   }
 
   onSelecting(event) {
+    if (this.transformGizmoController?.onSelecting(event)) {
+      return;
+    }
     this.selectionController?.onSelecting(event);
   }
 
   onSelectEnd(event) {
+    if (this.transformGizmoController?.onSelectEnd(event)) {
+      return;
+    }
     this.selectionController?.onSelectEnd(event);
   }
 
   update() {
+    this.transformGizmoController?.update();
     this.selectionController?.update();
   }
 
@@ -2354,6 +2403,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.pollHandle = null;
     }
     this.pollGeneration++;
+    this.transformGizmoController?.dispose();
+    this.transformGizmoController = null;
     this.selectionController?.dispose();
     this.selectionController = null;
     this.clearAssetInstances();
