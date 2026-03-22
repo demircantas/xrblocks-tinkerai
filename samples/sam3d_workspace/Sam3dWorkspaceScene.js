@@ -14,11 +14,6 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
 );
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
-const BACKEND_LOCAL_FRAME_ROTATION_DEG = xb.getUrlParamFloat(
-  'backendLocalFrameRotationDeg',
-  90
-);
-const BACKEND_LOCAL_FRAME_AXIS = new THREE.Vector3(1, 0, 0);
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -38,17 +33,6 @@ function matrixWorldToArray(object3D) {
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
-function createBackendLocalFrameMatrix() {
-  return new THREE.Matrix4().makeRotationAxis(
-    BACKEND_LOCAL_FRAME_AXIS,
-    THREE.MathUtils.degToRad(BACKEND_LOCAL_FRAME_ROTATION_DEG)
-  );
-}
-
-function createFrontendLocalFrameMatrix() {
-  return createBackendLocalFrameMatrix().clone().invert();
-}
-
 
 async function loadImageAsDataUrl(url) {
   const response = await fetch(url);
@@ -1000,6 +984,26 @@ export class Sam3dWorkspaceScene extends xb.Script {
     );
   }
 
+  findModelPoseRoot(model) {
+    if (!model) return null;
+
+    let current = model.gltfMesh?.scene || this.findModelContentRoot(model) || model;
+    while (
+      current &&
+      !current.isMesh &&
+      current.children?.length === 1
+    ) {
+      const child = current.children[0];
+      const isTransformCarrier = child.isMesh || child.type === 'Group' || child.type === 'Scene';
+      if (!isTransformCarrier) {
+        break;
+      }
+      current = child;
+    }
+
+    return current || model;
+  }
+
   assignSelectionNodePaths(model) {
     const contentRoot = this.findModelContentRoot(model);
     if (!contentRoot) return;
@@ -1883,22 +1887,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return fallbackMatrix ? new THREE.Matrix4().fromArray(fallbackMatrix) : null;
     }
 
-    const contentRoot = this.findModelContentRoot(model);
-    if (!contentRoot || contentRoot === model) {
+    const poseRoot = this.findModelPoseRoot(model);
+    if (!poseRoot || poseRoot === model) {
       return fallbackMatrix
         ? new THREE.Matrix4().fromArray(fallbackMatrix)
         : new THREE.Matrix4().copy(model.matrixWorld);
     }
 
-    return new THREE.Matrix4().copy(contentRoot.matrixWorld);
-  }
-
-  convertVisibleToBackendTransformMatrix(visibleMatrix) {
-    return visibleMatrix.clone().multiply(createBackendLocalFrameMatrix());
-  }
-
-  convertBackendToVisibleTransformMatrix(backendMatrix) {
-    return backendMatrix.clone().multiply(createFrontendLocalFrameMatrix());
+    return new THREE.Matrix4().copy(poseRoot.matrixWorld);
   }
 
   getPersistedTransformMatrix(model, fallbackMatrix = null) {
@@ -1906,30 +1902,30 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!visibleMatrix) {
       return fallbackMatrix;
     }
-    return this.convertVisibleToBackendTransformMatrix(visibleMatrix).toArray();
+    return visibleMatrix.toArray();
   }
 
   applyPersistedTransformToModel(model, transformArray) {
     if (!model || !transformArray) return;
 
-    const contentRoot = this.findModelContentRoot(model);
-    const backendMatrix = new THREE.Matrix4().fromArray(transformArray);
-    const desiredContentWorld = this.convertBackendToVisibleTransformMatrix(
-      backendMatrix
-    );
+    const poseRoot = this.findModelPoseRoot(model);
+    const desiredContentWorld = new THREE.Matrix4().fromArray(transformArray);
 
-    if (!contentRoot || contentRoot === model) {
+    if (!poseRoot || poseRoot === model) {
       this.applyTransformToModel(model, desiredContentWorld.toArray());
       return;
     }
 
     model.updateMatrixWorld(true);
-    contentRoot.updateMatrixWorld(true);
+    poseRoot.updateMatrixWorld(true);
 
-    const contentLocal = contentRoot.matrix.clone();
+    const modelWorldInverse = new THREE.Matrix4().copy(model.matrixWorld).invert();
+    const poseRootLocalToModel = modelWorldInverse.multiply(
+      new THREE.Matrix4().copy(poseRoot.matrixWorld)
+    );
     const desiredWrapperWorld = desiredContentWorld
       .clone()
-      .multiply(contentLocal.invert());
+      .multiply(poseRootLocalToModel.invert());
     const parentWorldInverse = model.parent
       ? model.parent.matrixWorld.clone().invert()
       : new THREE.Matrix4();
