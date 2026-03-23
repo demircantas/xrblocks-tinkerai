@@ -842,7 +842,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.userFlowPanel = new xb.SpatialPanel({
       width: 0.54,
-      height: 0.86,
+      height: 0.94,
       backgroundColor: '#111827EE',
       useDefaultPosition: false,
     });
@@ -899,7 +899,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowPreviewPanel.updateLayouts();
 
     this.userFlowButtons = [];
-    for (let rowIndex = 0; rowIndex < 4; rowIndex++) {
+    for (let rowIndex = 0; rowIndex < 5; rowIndex++) {
       const row = userGrid.addRow({weight: 0.1});
       for (let colIndex = 0; colIndex < 2; colIndex++) {
         const button = row.addCol({weight: 0.5}).addTextButton({
@@ -1013,6 +1013,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
         backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
         onTriggered: () => this.enterSegmentMode(),
       });
+      this.configureUserFlowButton(8, {
+        text: 'Delete Asset',
+        backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
+        onTriggered: () => this.deleteActiveAssetFromWorkspace(),
+        visible: hasAssets,
+      });
     } else if (this.userFlowMode === 'segment') {
       this.userFlowModeText.text = 'Segment';
       this.userFlowDetailText.text =
@@ -1058,6 +1064,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
         backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
         onTriggered: () => this.enterComposeMode(),
       });
+      this.configureUserFlowButton(8, {
+        text: 'Delete Asset',
+        backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
+        onTriggered: () => this.deleteActiveAssetFromWorkspace(),
+      });
     } else if (this.userFlowMode === 'compose') {
       this.userFlowModeText.text = 'Compose';
       this.userFlowDetailText.text =
@@ -1085,6 +1096,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
           preserveActive: true,
           statusText: 'Segment mode resumed. Continue refining selections.',
         }),
+      });
+      this.configureUserFlowButton(8, {
+        text: 'Delete Asset',
+        backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
+        onTriggered: () => this.deleteActiveAssetFromWorkspace(),
       });
     }
   }
@@ -1361,6 +1377,47 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.setActiveAsset(nextAsset.assetId);
     this.setStatus('Active asset set to ' + nextAsset.assetId + '.');
+  }
+
+  deleteActiveAssetFromWorkspace() {
+    const assetCount = this.workspaceState.assets.length;
+    if (!assetCount || !this.activeAssetId) {
+      this.setStatus('No active asset is selected to delete.');
+      return;
+    }
+
+    const deletedAssetId = this.activeAssetId;
+    const deletedIndex = Math.max(
+      0,
+      this.workspaceState.assets.findIndex((asset) => asset.assetId === deletedAssetId)
+    );
+
+    this.removeAssetInstance(deletedAssetId);
+    this.workspaceState.assets = this.workspaceState.assets.filter(
+      (asset) => asset.assetId !== deletedAssetId
+    );
+
+    if (!this.workspaceState.assets.length) {
+      this.activeAssetId = null;
+      this.syncSelectionController();
+      this.syncTransformGizmo();
+      this.refreshPromptText();
+      this.updateSelectionUi();
+      this.updateTransformUi();
+      this.updateUserFlowUi();
+      if (!this.debugUiEnabled) {
+        this.enterGenerateMode();
+        this.setStatus('Deleted ' + deletedAssetId + '. No assets remain, so generate mode is active again.');
+      } else {
+        this.setStatus('Deleted ' + deletedAssetId + ' from the workspace.');
+      }
+      return;
+    }
+
+    const nextIndex = Math.min(deletedIndex, this.workspaceState.assets.length - 1);
+    const nextAsset = this.workspaceState.assets[nextIndex] || this.workspaceState.assets[this.workspaceState.assets.length - 1];
+    this.setActiveAsset(nextAsset.assetId);
+    this.setStatus('Deleted ' + deletedAssetId + '. Active asset: ' + nextAsset.assetId + '.');
   }
 
   updateActiveAssetTransformRecord() {
@@ -3162,6 +3219,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     super.dispose();
   }
 }
+
+
 
 
 
