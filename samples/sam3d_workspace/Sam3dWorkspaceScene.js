@@ -11,6 +11,10 @@ const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
 const OVERLAY_ON_CAMERA = xb.getUrlParamBool('overlayOnCamera', false);
 const DEBUG_UI = xb.getUrlParamBool('debugUi', false);
+const ENABLE_TRANSIENT_MODELVIEWER = xb.getUrlParamBool(
+  'transientModelViewer',
+  true
+);
 const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
   'useDesktopGeminiCapture',
   false
@@ -22,6 +26,7 @@ const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const IDENTITY_MATRIX_ARRAY = new THREE.Matrix4().toArray();
 
 function getUrlParamString(name, defaultValue = '') {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -40,6 +45,18 @@ function matrixWorldToArray(object3D) {
 
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
+}
+
+function matricesDiffer(a, b, epsilon = 1e-4) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== 16 || b.length !== 16) {
+    return a !== b;
+  }
+  for (let i = 0; i < 16; i += 1) {
+    if (Math.abs(a[i] - b[i]) > epsilon) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function loadImageAsDataUrl(url) {
@@ -78,6 +95,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
     this.assetInstances = new Map();
+    this.assetPreviewModels = new Map();
     this.assetDerivedViews = new Map();
     this.catalogItems = [];
     this.catalogIndex = 0;
@@ -1308,7 +1326,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!this.activeAssetId) {
       return null;
     }
-    return this.assetInstances.get(this.activeAssetId) || null;
+    return this.getAssetRoot(this.activeAssetId);
   }
 
   stepActiveAsset(delta) {
@@ -1602,21 +1620,35 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   shouldEnableTransientModelViewerTransforms() {
-    return !this.debugUiEnabled && (
+    return ENABLE_TRANSIENT_MODELVIEWER && !this.debugUiEnabled && (
       this.userFlowMode === 'generate' || this.userFlowMode === 'segment'
     );
   }
 
-  restorePersistentAssetTransforms() {
+  collectTransientTransformDriftAssetIds() {
+    const driftingAssetIds = [];
     for (const assetRecord of this.workspaceState.assets) {
-      const model = this.assetInstances.get(assetRecord.assetId);
-      const transformMatrix = normalizeTransformMatrix(assetRecord);
-      if (!model || !transformMatrix) {
+      const previewModel = this.getAssetPreviewModel(assetRecord.assetId);
+      if (this.hasTransientPreviewTransform(previewModel)) {
+        driftingAssetIds.push(assetRecord.assetId);
+      }
+    }
+    return driftingAssetIds;
+  }
+
+  restorePersistentAssetTransforms() {
+    const restoredAssetIds = [];
+    for (const assetRecord of this.workspaceState.assets) {
+      const previewModel = this.getAssetPreviewModel(assetRecord.assetId);
+      if (!this.hasTransientPreviewTransform(previewModel)) {
         continue;
       }
-      this.applyPersistedTransformToModel(model, transformMatrix);
+      this.resetTransientPreviewTransform(previewModel);
+      restoredAssetIds.push(assetRecord.assetId);
     }
+    this.syncSelectionController();
     this.syncTransformGizmo();
+    return restoredAssetIds;
   }
 
   async runMicCapabilityTest() {
@@ -1662,6 +1694,28 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return this.workspaceState.assets.find((asset) => asset.assetId === assetId) || null;
   }
 
+  getAssetRoot(assetId) {
+    return this.assetInstances.get(assetId) || null;
+  }
+
+  getAssetPreviewModel(assetId) {
+    return this.assetPreviewModels.get(assetId) || null;
+  }
+
+  hasTransientPreviewTransform(model) {
+    if (!model) return false;
+    return matricesDiffer(matrixToArray(model), IDENTITY_MATRIX_ARRAY);
+  }
+
+  resetTransientPreviewTransform(model) {
+    if (!model) return;
+    model.position.set(0, 0, 0);
+    model.quaternion.identity();
+    model.scale.set(1, 1, 1);
+    model.updateMatrix();
+    model.updateMatrixWorld(true);
+  }
+
   upsertAssetRecord(assetRecord) {
     const index = this.workspaceState.assets.findIndex(
       (asset) => asset.assetId === assetRecord.assetId
@@ -1680,19 +1734,26 @@ export class Sam3dWorkspaceScene extends xb.Script {
   removeAssetInstance(assetId) {
     this.disposeDerivedAssetView(assetId);
 
-    const trackedModel = this.assetInstances.get(assetId);
-    if (trackedModel) {
-      trackedModel.parent?.remove(trackedModel);
-      trackedModel.dispose?.();
+    const previewModel = this.assetPreviewModels.get(assetId);
+    if (previewModel) {
+      previewModel.parent?.remove(previewModel);
+      previewModel.dispose?.();
+      this.assetPreviewModels.delete(assetId);
+    }
+
+    const trackedRoot = this.assetInstances.get(assetId);
+    if (trackedRoot) {
+      trackedRoot.parent?.remove(trackedRoot);
+      trackedRoot.dispose?.();
       this.assetInstances.delete(assetId);
     }
 
-    const orphanedModels = this.children.filter(
+    const orphanedRoots = this.children.filter(
       (child) => child?.userData?.assetId === assetId
     );
-    for (const model of orphanedModels) {
-      model.parent?.remove(model);
-      model.dispose?.();
+    for (const root of orphanedRoots) {
+      root.parent?.remove(root);
+      root.dispose?.();
     }
 
     if (this.activeAssetId === assetId) {
@@ -1815,7 +1876,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   applyAssetViewMode(assetId) {
-    const model = this.assetInstances.get(assetId);
+    const model = this.getAssetPreviewModel(assetId);
     const assetRecord = this.getAssetRecord(assetId);
     if (!model || !assetRecord) return;
 
@@ -1856,7 +1917,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   rebuildKeptOnlyView(assetId) {
-    const model = this.assetInstances.get(assetId);
+    const model = this.getAssetPreviewModel(assetId);
     const assetRecord = this.getAssetRecord(assetId);
     if (!model || !assetRecord) return;
 
@@ -1971,7 +2032,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   buildWorkspaceSnapshot({useLiveTransforms = true} = {}) {
     const assets = this.workspaceState.assets.map((assetRecord) => {
-      const model = this.assetInstances.get(assetRecord.assetId);
+      const model = this.getAssetRoot(assetRecord.assetId);
       return {
         assetId: assetRecord.assetId,
         latentHandle: assetRecord.latentHandle,
@@ -2024,7 +2085,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     const activeAssetId = this.activeAssetId;
-    const activeModel = activeAssetId ? this.assetInstances.get(activeAssetId) : null;
+    const activeModel = activeAssetId ? this.getAssetPreviewModel(activeAssetId) : null;
     const activeAssetRecord = activeAssetId ? this.getAssetRecord(activeAssetId) : null;
 
     if (activeAssetId && activeModel && activeAssetRecord) {
@@ -2047,7 +2108,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    const activeModel = this.activeAssetId ? this.assetInstances.get(this.activeAssetId) : null;
+    const activeModel = this.activeAssetId ? this.getAssetRoot(this.activeAssetId) : null;
     this.transformGizmoController.setTarget(activeModel || null, {
       enabled: !!activeModel && !this.isSelectionMode && this.shouldEnableTransformTools(),
     });
@@ -2056,17 +2117,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
   applyWorkspaceInteractionPolicy() {
     const allowTransientModelViewerTransforms =
       this.shouldEnableTransientModelViewerTransforms() && !this.isSelectionMode;
-    const activeModel = this.activeAssetId
-      ? this.assetInstances.get(this.activeAssetId)
+    const activePreviewModel = this.activeAssetId
+      ? this.getAssetPreviewModel(this.activeAssetId)
       : null;
 
-    for (const model of this.assetInstances.values()) {
+    for (const [assetId, previewModel] of this.assetPreviewModels.entries()) {
       const enableModelViewerInteraction =
-        allowTransientModelViewerTransforms && model === activeModel;
-      model.draggable = enableModelViewerInteraction;
-      model.rotatable = enableModelViewerInteraction;
-      model.scalable = enableModelViewerInteraction;
-      model.traverse((node) => {
+        allowTransientModelViewerTransforms && previewModel === activePreviewModel;
+      previewModel.draggable = enableModelViewerInteraction;
+      previewModel.rotatable = enableModelViewerInteraction;
+      previewModel.scalable = enableModelViewerInteraction;
+      previewModel.traverse((node) => {
         const hiddenFromView = node.visible === false;
         const isDerivedKeptOnly = !!node.userData?.isDerivedKeptOnly;
         const isExplicitDragHandle = !!node.draggingMode;
@@ -2075,6 +2136,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
           (hiddenFromView && !isExplicitDragHandle) ||
           isDerivedKeptOnly;
       });
+
+      const authoredRoot = this.getAssetRoot(assetId);
+      if (authoredRoot) {
+        authoredRoot.ignoreReticleRaycast = true;
+      }
     }
 
     this.transformGizmoController?.setEnabled(
@@ -2165,8 +2231,21 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   async saveUserFlowWorkspaceSelection() {
+    const driftingAssetIds = this.collectTransientTransformDriftAssetIds();
     const saved = await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     if (!saved) {
+      return;
+    }
+    if (driftingAssetIds.length) {
+      console.warn(
+        'Selection workspace save ignored transient ModelViewer transforms for assets:',
+        driftingAssetIds
+      );
+      this.setStatus(
+        'Selection workspace saved. Ignored temporary ModelViewer pose on ' +
+          driftingAssetIds.length +
+          ' asset(s).'
+      );
       return;
     }
     this.setStatus('Selection workspace saved.');
@@ -2238,12 +2317,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    this.restorePersistentAssetTransforms();
+    const restoredAssetIds = this.restorePersistentAssetTransforms();
     await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     this.userFlowMode = 'compose';
     this.applyComposeModeDefaults();
     this.updateUserFlowUi();
-    this.setStatus('Compose mode started. Transform one asset at a time, then compose the workspace.');
+    this.setStatus(
+      restoredAssetIds.length
+        ? 'Compose mode started. Reset temporary preview pose for ' +
+            restoredAssetIds.length +
+            ' asset(s).'
+        : 'Compose mode started. Transform one asset at a time, then compose the workspace.'
+    );
   }
 
   async composeUserFlowWorkspace() {
@@ -2257,9 +2342,15 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    this.restorePersistentAssetTransforms();
+    const restoredAssetIds = this.restorePersistentAssetTransforms();
     await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     const workspaceId = this.userFlowWorkspaceId;
+    if (restoredAssetIds.length) {
+      console.warn(
+        'Compose request reset temporary preview transforms before save for assets:',
+        restoredAssetIds
+      );
+    }
 
     try {
       const job = await this.apiClient.createComposeJob({
@@ -2729,12 +2820,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.removeAssetInstance(assetRecord.assetId);
 
-    const model = new xb.ModelViewer({});
-    model.userData.assetId = assetRecord.assetId;
-    this.add(model);
+    const authoredRoot = new THREE.Group();
+    authoredRoot.name = `AssetRoot-${assetRecord.assetId}`;
+    authoredRoot.userData.assetId = assetRecord.assetId;
+    authoredRoot.userData.isAuthoredAssetRoot = true;
+    authoredRoot.ignoreReticleRaycast = true;
+    this.add(authoredRoot);
+
+    const previewModel = new xb.ModelViewer({});
+    previewModel.userData.assetId = assetRecord.assetId;
+    previewModel.userData.isAssetPreviewModel = true;
+    authoredRoot.add(previewModel);
 
     const {path, model: modelName} = this.splitAssetUrl(assetRecord.glbUrl);
-    await model.loadGLTFModel({
+    await previewModel.loadGLTFModel({
       data: {
         path,
         model: modelName,
@@ -2747,30 +2846,31 @@ export class Sam3dWorkspaceScene extends xb.Script {
       setupPlatform: true,
       renderer: xb.core.renderer,
     });
-    this.markModelViewerHelperNodes(model);
+    this.markModelViewerHelperNodes(previewModel);
 
     const transformMatrix = normalizeTransformMatrix(assetRecord);
     if (transformMatrix) {
-      this.applyPersistedTransformToModel(model, transformMatrix);
+      this.applyPersistedTransformToModel(authoredRoot, transformMatrix);
     } else {
       const placement = this.getDefaultPlacementForIndex(this.workspaceState.assets.length);
-      model.position.set(placement.x, placement.y, placement.z);
-      model.updateMatrix();
-      model.updateMatrixWorld(true);
+      authoredRoot.position.set(placement.x, placement.y, placement.z);
+      authoredRoot.updateMatrix();
+      authoredRoot.updateMatrixWorld(true);
       assetRecord.transformMatrix = this.getPersistedTransformMatrix(
-        model,
-        matrixToArray(model)
+        authoredRoot,
+        matrixToArray(authoredRoot)
       );
     }
 
-    this.assignSelectionNodePaths(model);
+    this.assignSelectionNodePaths(previewModel);
 
-    this.assetInstances.set(assetRecord.assetId, model);
+    this.assetInstances.set(assetRecord.assetId, authoredRoot);
+    this.assetPreviewModels.set(assetRecord.assetId, previewModel);
     this.upsertAssetRecord({
       ...assetRecord,
       transformMatrix:
         normalizeTransformMatrix(assetRecord) ||
-        this.getPersistedTransformMatrix(model, matrixToArray(model)),
+        this.getPersistedTransformMatrix(authoredRoot, matrixToArray(authoredRoot)),
       selections: assetRecord.selections || [],
       viewMode: assetRecord.viewMode || 'full',
     });
@@ -2788,16 +2888,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.updateSelectionUi();
     }
 
-    return model;
+    return authoredRoot;
   }
 
   async loadGeneratedAsset(asset, sourceLabel = 'Generated') {
     const existingRecord = this.getAssetRecord(asset.assetId);
     const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
-    const model = await this.instantiateAssetRecord(assetRecord);
+    const authoredRoot = await this.instantiateAssetRecord(assetRecord);
     assetRecord.transformMatrix = this.getPersistedTransformMatrix(
-      model,
-      matrixToArray(model)
+      authoredRoot,
+      matrixToArray(authoredRoot)
     );
     this.upsertAssetRecord(assetRecord);
     this.currentPrompt = assetRecord.prompt || this.currentPrompt;

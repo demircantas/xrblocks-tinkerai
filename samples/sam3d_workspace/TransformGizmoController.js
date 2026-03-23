@@ -263,6 +263,16 @@ export class TransformGizmoController {
 
   findContentRoot(target) {
     if (!target) return null;
+    const previewModel = target.children?.find(
+      (child) => child.userData?.isAssetPreviewModel
+    );
+    if (previewModel) {
+      return previewModel.gltfMesh?.scene ||
+        previewModel.children.find(
+          (child) => child.type === 'Group' || child.type === 'Scene'
+        ) ||
+        previewModel;
+    }
     return target.gltfMesh?.scene ||
       target.children.find((child) => child.type === 'Group' || child.type === 'Scene') ||
       target;
