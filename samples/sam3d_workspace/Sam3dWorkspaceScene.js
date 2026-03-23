@@ -1048,6 +1048,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
         backgroundColor: '#1d4ed8',
         onTriggered: () => this.loadUserFlowWorkspaceSelection(),
       });
+      this.configureUserFlowButton(6, {
+        text: 'To Generate',
+        backgroundColor: '#475569',
+        onTriggered: () => this.enterGenerateMode(),
+      });
       this.configureUserFlowButton(7, {
         text: 'To Compose',
         backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
@@ -1072,6 +1077,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
         text: 'Compose',
         backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
         onTriggered: () => this.composeUserFlowWorkspace(),
+      });
+      this.configureUserFlowButton(7, {
+        text: 'To Segment',
+        backgroundColor: '#475569',
+        onTriggered: () => this.enterSegmentMode({
+          preserveActive: true,
+          statusText: 'Segment mode resumed. Continue refining selections.',
+        }),
       });
     }
   }
@@ -1613,6 +1626,29 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.confirmationTranscript = '';
     this.updateUserFlowUi();
     this.setStatus('Prompt cancelled. Push to talk for a new try.');
+  }
+
+  enterGenerateMode() {
+    if (this.currentJobId) {
+      this.setStatus('Wait for the current backend job to finish before changing phases.');
+      return;
+    }
+
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.confirmationTranscript = '';
+    this.recordingPurpose = 'prompt';
+    this.userFlowMode = 'generate';
+    this.isSelectionMode = false;
+    this.selectionController?.setDrawMode(false);
+    this.hideUserFlowCapturePreview();
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+    this.updateUserFlowUi();
+    this.setStatus(
+      this.workspaceState.assets.length
+        ? 'Generate mode resumed. Record a new prompt to create another object.'
+        : 'Generate mode. Use push-to-talk to describe the object you want to generate.'
+    );
   }
 
   shouldEnableTransformTools() {
@@ -2261,11 +2297,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshWorkspaceStatusText();
     await this.loadWorkspace();
     this.userFlowMode = 'segment';
-    this.applySegmentModeDefaults();
+    this.applySegmentModeDefaults({preserveActive: true});
+    this.updateUserFlowUi();
     this.setStatus('Latest saved selections restored for this session.');
   }
 
-  applySegmentModeDefaults() {
+  applySegmentModeDefaults({preserveActive = false} = {}) {
     if (!this.workspaceState.assets.length) {
       this.isSelectionMode = false;
       this.selectionController?.setDrawMode(false);
@@ -2276,14 +2313,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     for (const asset of this.workspaceState.assets) {
       this.setAssetViewMode(asset.assetId, 'kept-only');
     }
-    this.setActiveAsset(this.workspaceState.assets[0].assetId);
+    const nextActiveAssetId = preserveActive && this.activeAssetId
+      ? this.activeAssetId
+      : this.workspaceState.assets[0].assetId;
+    this.setActiveAsset(nextActiveAssetId);
     this.isSelectionMode = true;
     this.selectionController?.setDrawMode(true);
     this.applyWorkspaceInteractionPolicy();
     this.updateSelectionUi();
   }
 
-  async enterSegmentMode() {
+  async enterSegmentMode({
+    preserveActive = false,
+    statusText = 'Segment mode started. Choose what to keep on each asset.',
+  } = {}) {
     if (!this.workspaceState.assets.length) {
       this.setStatus('Generate at least one asset before continuing to segment mode.');
       return;
@@ -2293,9 +2336,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowAwaitingPromptConfirmation = false;
     this.userFlowMode = 'segment';
     this.hideUserFlowCapturePreview();
-    this.applySegmentModeDefaults();
+    this.applySegmentModeDefaults({preserveActive});
     this.updateUserFlowUi();
-    this.setStatus('Segment mode started. Choose what to keep on each asset.');
+    this.setStatus(statusText);
   }
 
   applyComposeModeDefaults({preserveActive = false} = {}) {
