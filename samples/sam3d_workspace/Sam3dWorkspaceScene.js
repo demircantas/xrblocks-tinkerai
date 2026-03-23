@@ -1064,6 +1064,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.promptKeyboard.visible = false;
     this.promptKeyboard.position.set(0, -0.42, 0.1);
     this.promptKeyboard.setText(this.currentPrompt);
+    this.setPromptKeyboardInteractionEnabled(false);
 
     this.promptKeyboard.onTextChanged = (text) => {
       this.currentPrompt = text || '';
@@ -1078,6 +1079,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.refreshPromptText();
       this.hidePromptEditor('Prompt updated from keyboard.');
     };
+  }
+
+  setPromptKeyboardInteractionEnabled(enabled) {
+    if (!this.promptKeyboard) return;
+    this.promptKeyboard.traverse((node) => {
+      node.ignoreReticleRaycast = !enabled;
+    });
   }
 
   createSelectionController() {
@@ -1392,6 +1400,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.isPromptEditorOpen = true;
     this.promptKeyboard.setText(this.currentPrompt || '');
     this.promptKeyboard.visible = true;
+    this.setPromptKeyboardInteractionEnabled(true);
     this.setStatus('Prompt editor open. Type on the XR keyboard and press Enter.');
   }
 
@@ -1399,6 +1408,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!this.promptKeyboard) return;
     this.isPromptEditorOpen = false;
     this.promptKeyboard.visible = false;
+    this.setPromptKeyboardInteractionEnabled(false);
     this.setStatus(statusText);
   }
 
@@ -1591,6 +1601,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return this.debugUiEnabled || this.userFlowMode === 'compose';
   }
 
+  shouldEnableTransientModelViewerTransforms() {
+    return !this.debugUiEnabled && (
+      this.userFlowMode === 'generate' || this.userFlowMode === 'segment'
+    );
+  }
+
+  restorePersistentAssetTransforms() {
+    for (const assetRecord of this.workspaceState.assets) {
+      const model = this.assetInstances.get(assetRecord.assetId);
+      const transformMatrix = normalizeTransformMatrix(assetRecord);
+      if (!model || !transformMatrix) {
+        continue;
+      }
+      this.applyPersistedTransformToModel(model, transformMatrix);
+    }
+    this.syncTransformGizmo();
+  }
+
   async runMicCapabilityTest() {
     this.setStatus('Requesting microphone access...');
     this.updateMicDiagnostics('Testing microphone access...');
@@ -1704,6 +1732,19 @@ export class Sam3dWorkspaceScene extends xb.Script {
     };
   }
 
+  markModelViewerHelperNodes(model) {
+    if (!model) return;
+    for (const helper of [model.rotationRaycastMesh, model.platform, model.controlBar]) {
+      if (!helper) continue;
+      helper.traverse((node) => {
+        node.userData.isModelViewerHelper = true;
+      });
+    }
+    if (model.rotationRaycastMesh) {
+      model.rotationRaycastMesh.visible = false;
+    }
+  }
+
   findModelContentRoot(model) {
     if (!model) return null;
     return model.gltfMesh?.scene ||
@@ -1782,6 +1823,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     model.traverse((node) => {
       if (!node.isMesh) return;
       if (node.userData?.isDerivedKeptOnly) return;
+      if (node.userData?.isModelViewerHelper) return;
       node.visible = !showKeptOnly;
     });
 
@@ -1927,7 +1969,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return derivedGeometry;
   }
 
-  buildWorkspaceSnapshot() {
+  buildWorkspaceSnapshot({useLiveTransforms = true} = {}) {
     const assets = this.workspaceState.assets.map((assetRecord) => {
       const model = this.assetInstances.get(assetRecord.assetId);
       return {
@@ -1936,7 +1978,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         glbUrl: assetRecord.glbUrl,
         prompt: assetRecord.prompt,
         thumbnailUrl: assetRecord.thumbnailUrl,
-        transformMatrix: model
+        transformMatrix: useLiveTransforms && model
           ? this.getPersistedTransformMatrix(model, normalizeTransformMatrix(assetRecord))
           : normalizeTransformMatrix(assetRecord),
         selections: assetRecord.selections || [],
@@ -2012,12 +2054,26 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   applyWorkspaceInteractionPolicy() {
+    const allowTransientModelViewerTransforms =
+      this.shouldEnableTransientModelViewerTransforms() && !this.isSelectionMode;
+    const activeModel = this.activeAssetId
+      ? this.assetInstances.get(this.activeAssetId)
+      : null;
+
     for (const model of this.assetInstances.values()) {
-      model.draggable = false;
-      model.rotatable = false;
-      model.scalable = false;
+      const enableModelViewerInteraction =
+        allowTransientModelViewerTransforms && model === activeModel;
+      model.draggable = enableModelViewerInteraction;
+      model.rotatable = enableModelViewerInteraction;
+      model.scalable = enableModelViewerInteraction;
       model.traverse((node) => {
-        node.ignoreReticleRaycast = true;
+        const hiddenFromView = node.visible === false;
+        const isDerivedKeptOnly = !!node.userData?.isDerivedKeptOnly;
+        const isExplicitDragHandle = !!node.draggingMode;
+        node.ignoreReticleRaycast =
+          !enableModelViewerInteraction ||
+          (hiddenFromView && !isExplicitDragHandle) ||
+          isDerivedKeptOnly;
       });
     }
 
@@ -2102,7 +2158,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.userFlowWorkspaceId = this.generateWorkspaceSnapshotId();
     }
 
-    const workspace = this.buildWorkspaceSnapshot();
+    const workspace = this.buildWorkspaceSnapshot({useLiveTransforms: false});
     this.apiClient.workspaceId = this.userFlowWorkspaceId;
     this.refreshWorkspaceStatusText();
     return await this.apiClient.saveWorkspace(workspace);
@@ -2182,6 +2238,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
+    this.restorePersistentAssetTransforms();
     await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     this.userFlowMode = 'compose';
     this.applyComposeModeDefaults();
@@ -2200,6 +2257,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
+    this.restorePersistentAssetTransforms();
     await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     const workspaceId = this.userFlowWorkspaceId;
 
@@ -2684,11 +2742,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
         verticallyAlignObject: false,
         horizontallyAlignObject: false,
       },
-      setupRaycastCylinder: false,
+      setupRaycastCylinder: true,
       setupRaycastBox: false,
-      setupPlatform: false,
+      setupPlatform: true,
       renderer: xb.core.renderer,
     });
+    this.markModelViewerHelperNodes(model);
 
     const transformMatrix = normalizeTransformMatrix(assetRecord);
     if (transformMatrix) {
