@@ -22,6 +22,9 @@ const USE_DESKTOP_GEMINI_CAPTURE = xb.getUrlParamBool(
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
 const USER_CAPTURE_PREVIEW_MS = 4000;
+const MODE_GENERATE_COLOR = '#2563eb';
+const MODE_SEGMENT_COLOR = '#0f766e';
+const MODE_COMPOSE_COLOR = '#7c3aed';
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -41,6 +44,45 @@ function matrixToArray(object3D) {
 function matrixWorldToArray(object3D) {
   object3D.updateMatrixWorld(true);
   return object3D.matrixWorld.toArray();
+}
+
+function getColorVector4(colorValue) {
+  if (typeof colorValue === 'number') {
+    const color = new THREE.Color(colorValue);
+    return new THREE.Vector4(color.r, color.g, color.b, 1);
+  }
+
+  if (typeof colorValue === 'string') {
+    let hex = colorValue.startsWith('#') ? colorValue.slice(1) : colorValue;
+    let alpha = 1;
+    if (hex.length === 3 || hex.length === 4) {
+      hex = hex.split('').map((char) => char + char).join('');
+    }
+    if (hex.length === 8) {
+      alpha = parseInt(hex.slice(6, 8), 16) / 255;
+      hex = hex.slice(0, 6);
+    }
+    if (hex.length === 6) {
+      const color = new THREE.Color('#' + hex);
+      return new THREE.Vector4(color.r, color.g, color.b, alpha);
+    }
+  }
+
+  return new THREE.Vector4(0, 0, 0, 1);
+}
+
+function applyTextButtonBackgroundColor(button, colorValue) {
+  if (!button) return;
+  button.backgroundColor = colorValue;
+  const uniforms = button.mesh?.material?.uniforms;
+  if (uniforms?.uBackgroundColor?.value) {
+    const colorVec4 = getColorVector4(colorValue);
+    if (typeof uniforms.uBackgroundColor.value.copy === 'function') {
+      uniforms.uBackgroundColor.value.copy(colorVec4);
+    } else {
+      uniforms.uBackgroundColor.value = colorVec4;
+    }
+  }
 }
 
 function normalizeTransformMatrix(assetRecord) {
@@ -949,7 +991,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const button = this.userFlowButtons?.[index];
     if (!button) return;
     button.text = text;
-    button.backgroundColor = backgroundColor;
+    applyTextButtonBackgroundColor(button, backgroundColor);
     button.onTriggered = onTriggered;
     button.visible = visible;
   }
@@ -1009,8 +1051,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
         visible: waitingForConfirm,
       });
       this.configureUserFlowButton(3, {
-        text: 'Next',
-        backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
+        text: 'To Segment',
+        backgroundColor: hasAssets ? MODE_SEGMENT_COLOR : '#1f2937',
         onTriggered: () => this.enterSegmentMode(),
       });
       this.configureUserFlowButton(8, {
@@ -1056,12 +1098,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
       this.configureUserFlowButton(6, {
         text: 'To Generate',
-        backgroundColor: '#475569',
+        backgroundColor: MODE_GENERATE_COLOR,
         onTriggered: () => this.enterGenerateMode(),
       });
       this.configureUserFlowButton(7, {
         text: 'To Compose',
-        backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
+        backgroundColor: hasAssets ? MODE_COMPOSE_COLOR : '#1f2937',
         onTriggered: () => this.enterComposeMode(),
       });
       this.configureUserFlowButton(8, {
@@ -1091,7 +1133,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
       this.configureUserFlowButton(7, {
         text: 'To Segment',
-        backgroundColor: '#475569',
+        backgroundColor: MODE_SEGMENT_COLOR,
         onTriggered: () => this.enterSegmentMode({
           preserveActive: true,
           statusText: 'Segment mode resumed. Continue refining selections.',
@@ -1286,28 +1328,28 @@ export class Sam3dWorkspaceScene extends xb.Script {
         ? 'Select: ON'
         : 'Select: OFF'
       : 'Select: N/A';
-    this.selectionModeButton.backgroundColor = hasTarget
+    applyTextButtonBackgroundColor(this.selectionModeButton, hasTarget
       ? this.isSelectionMode
         ? '#0f766e'
         : '#374151'
-      : '#1f2937';
+      : '#1f2937');
 
     this.paintModeButton.text = paintMode === 'keep' ? 'Mode: Keep' : 'Mode: Drop';
-    this.paintModeButton.backgroundColor = paintMode === 'keep' ? '#166534' : '#991b1b';
+    applyTextButtonBackgroundColor(this.paintModeButton, paintMode === 'keep' ? '#166534' : '#991b1b');
 
     this.previewSelectionButton.text = 'Preview';
-    this.previewSelectionButton.backgroundColor = hasTarget ? '#166534' : '#1f2937';
+    applyTextButtonBackgroundColor(this.previewSelectionButton, hasTarget ? '#166534' : '#1f2937');
 
-    this.clearSelectionButton.backgroundColor = hasTarget ? '#4b5563' : '#1f2937';
+    applyTextButtonBackgroundColor(this.clearSelectionButton, hasTarget ? '#4b5563' : '#1f2937');
     if (this.toggleKeptOnlyButton) {
       this.toggleKeptOnlyButton.text = viewMode === 'kept-only'
         ? 'View: Kept'
         : 'View: Full';
-      this.toggleKeptOnlyButton.backgroundColor = hasTarget
+      applyTextButtonBackgroundColor(this.toggleKeptOnlyButton, hasTarget
         ? viewMode === 'kept-only'
           ? '#0369a1'
           : '#1d4ed8'
-        : '#1f2937';
+        : '#1f2937');
     }
     this.updateUserFlowUi();
   }
@@ -1333,21 +1375,21 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const cycleEnabled = assetCount > 1;
     if (this.transformPrevAssetButton) {
-      this.transformPrevAssetButton.backgroundColor = cycleEnabled ? '#334155' : '#1f2937';
+      applyTextButtonBackgroundColor(this.transformPrevAssetButton, cycleEnabled ? '#334155' : '#1f2937');
     }
     if (this.transformNextAssetButton) {
-      this.transformNextAssetButton.backgroundColor = cycleEnabled ? '#334155' : '#1f2937';
+      applyTextButtonBackgroundColor(this.transformNextAssetButton, cycleEnabled ? '#334155' : '#1f2937');
     }
-    if (this.moveXNegativeButton) this.moveXNegativeButton.backgroundColor = hasTarget ? "#1d4ed8" : "#1f2937";
-    if (this.moveXPositiveButton) this.moveXPositiveButton.backgroundColor = hasTarget ? "#1d4ed8" : "#1f2937";
-    if (this.moveZNegativeButton) this.moveZNegativeButton.backgroundColor = hasTarget ? "#0f766e" : "#1f2937";
-    if (this.moveZPositiveButton) this.moveZPositiveButton.backgroundColor = hasTarget ? "#0f766e" : "#1f2937";
-    if (this.moveYPositiveButton) this.moveYPositiveButton.backgroundColor = hasTarget ? "#7c3aed" : "#1f2937";
-    if (this.moveYNegativeButton) this.moveYNegativeButton.backgroundColor = hasTarget ? "#7c3aed" : "#1f2937";
-    if (this.rotateNegativeButton) this.rotateNegativeButton.backgroundColor = hasTarget ? "#b45309" : "#1f2937";
-    if (this.rotatePositiveButton) this.rotatePositiveButton.backgroundColor = hasTarget ? "#b45309" : "#1f2937";
-    if (this.scaleDownButton) this.scaleDownButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
-    if (this.scaleUpButton) this.scaleUpButton.backgroundColor = hasTarget ? "#475569" : "#1f2937";
+    if (this.moveXNegativeButton) applyTextButtonBackgroundColor(this.moveXNegativeButton, hasTarget ? "#1d4ed8" : "#1f2937");
+    if (this.moveXPositiveButton) applyTextButtonBackgroundColor(this.moveXPositiveButton, hasTarget ? "#1d4ed8" : "#1f2937");
+    if (this.moveZNegativeButton) applyTextButtonBackgroundColor(this.moveZNegativeButton, hasTarget ? "#0f766e" : "#1f2937");
+    if (this.moveZPositiveButton) applyTextButtonBackgroundColor(this.moveZPositiveButton, hasTarget ? "#0f766e" : "#1f2937");
+    if (this.moveYPositiveButton) applyTextButtonBackgroundColor(this.moveYPositiveButton, hasTarget ? "#7c3aed" : "#1f2937");
+    if (this.moveYNegativeButton) applyTextButtonBackgroundColor(this.moveYNegativeButton, hasTarget ? "#7c3aed" : "#1f2937");
+    if (this.rotateNegativeButton) applyTextButtonBackgroundColor(this.rotateNegativeButton, hasTarget ? "#b45309" : "#1f2937");
+    if (this.rotatePositiveButton) applyTextButtonBackgroundColor(this.rotatePositiveButton, hasTarget ? "#b45309" : "#1f2937");
+    if (this.scaleDownButton) applyTextButtonBackgroundColor(this.scaleDownButton, hasTarget ? "#475569" : "#1f2937");
+    if (this.scaleUpButton) applyTextButtonBackgroundColor(this.scaleUpButton, hasTarget ? "#475569" : "#1f2937");
     this.updateUserFlowUi();
   }
 
@@ -3219,6 +3261,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     super.dispose();
   }
 }
+
+
 
 
 
