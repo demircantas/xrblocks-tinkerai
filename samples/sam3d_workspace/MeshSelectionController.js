@@ -12,6 +12,12 @@ const SCULPT_RESOLUTION = 28;
 const SCULPT_SUBTRACT = 12;
 const SCULPT_MAX_POLYGONS = 12000;
 const USE_DEBUG_SPHERE_BRUSH = true;
+const DEBUG_SPHERE_INITIAL_CAPACITY = 64;
+const DEBUG_SPHERE_WIDTH_SEGMENTS = 8;
+const DEBUG_SPHERE_HEIGHT_SEGMENTS = 6;
+
+const IDENTITY_QUATERNION = new THREE.Quaternion();
+const NO_RAYCAST = () => {};
 
 export class MeshSelectionController {
   constructor({
@@ -24,6 +30,7 @@ export class MeshSelectionController {
     this.onStatus = onStatus;
 
     this.overlay = new THREE.Group();
+    this.overlay.ignoreReticleRaycast = true;
     this.sceneRoot.add(this.overlay);
 
     this.raycaster = new THREE.Raycaster();
@@ -49,7 +56,11 @@ export class MeshSelectionController {
     this.totalVertexCount = 0;
     this.selectedVertexCount = 0;
     this.strokeWorldPoints = [];
+    this.visualStrokePoints = [];
     this.sculptMesh = null;
+    this.sculptSphereGeometry = null;
+    this.sculptSphereMaterial = null;
+    this.sculptSphereCapacity = 0;
     this.sculptBounds = new THREE.Box3();
     this.sculptBoundsMin = new THREE.Vector3();
     this.sculptBoundsCenter = new THREE.Vector3();
@@ -66,11 +77,14 @@ export class MeshSelectionController {
     this._tmpInterpPoint = new THREE.Vector3();
     this._tmpBoxSize = new THREE.Vector3();
     this._tmpBoxCenter = new THREE.Vector3();
+    this._tmpSphereScale = new THREE.Vector3();
+    this._tmpInstanceMatrix = new THREE.Matrix4();
   }
 
   dispose() {
     this.detach();
     this.sceneRoot?.remove(this.overlay);
+    this.disposeDebugSphereResources();
   }
 
   attach({assetId, model, selections = []}) {
@@ -105,6 +119,7 @@ export class MeshSelectionController {
     this.totalVertexCount = 0;
     this.selectedVertexCount = 0;
     this.strokeWorldPoints = [];
+    this.visualStrokePoints = [];
   }
 
   findContentRoot(model) {
@@ -324,6 +339,31 @@ export class MeshSelectionController {
     });
   }
 
+  disableReticleRaycast(target) {
+    if (!target) return target;
+    target.ignoreReticleRaycast = true;
+    target.raycast = NO_RAYCAST;
+    return target;
+  }
+
+  getVisualPointSpacing() {
+    return Math.max(this.visualBrushRadius * 0.45, this.sampleStepDistance * 1.5);
+  }
+
+  appendVisualStrokePoint(point) {
+    const spacing = this.getVisualPointSpacing();
+    const lastPoint = this.visualStrokePoints[this.visualStrokePoints.length - 1];
+    if (lastPoint && lastPoint.distanceToSquared(point) < spacing * spacing) {
+      return;
+    }
+
+    const visualPoint = point.clone();
+    this.visualStrokePoints.push(visualPoint);
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      this.appendDebugSphereInstance(visualPoint);
+    }
+  }
+
   clearSelectionPreview() {
     for (const mesh of this.meshes) {
       const children = [...mesh.children];
@@ -366,6 +406,7 @@ export class MeshSelectionController {
       });
       const previewPoints = new THREE.Points(previewGeom, previewMat);
       previewPoints.userData.isSelectionPreview = true;
+      this.disableReticleRaycast(previewPoints);
       meta.mesh.add(previewPoints);
       totalPreviewed += selectedLocal.length / 3;
     }
@@ -380,7 +421,13 @@ export class MeshSelectionController {
     }
 
     if (USE_DEBUG_SPHERE_BRUSH) {
-      this.sculptMesh = new THREE.Group();
+      this.ensureDebugSphereResources();
+      this.sculptSphereCapacity = Math.max(
+        this.sculptSphereCapacity || 0,
+        DEBUG_SPHERE_INITIAL_CAPACITY
+      );
+      this.sculptMesh = this.createDebugSphereMesh(this.sculptSphereCapacity);
+      this.disableReticleRaycast(this.sculptMesh);
       this.overlay.add(this.sculptMesh);
       return;
     }
@@ -411,11 +458,9 @@ export class MeshSelectionController {
       return;
     }
     if (USE_DEBUG_SPHERE_BRUSH) {
-      for (const child of this.sculptMesh.children || []) {
-        child.material?.color?.set(
-          this.paintMode === 'keep' ? 0x22c55e : 0xef4444
-        );
-      }
+      this.sculptSphereMaterial?.color?.set(
+        this.paintMode === 'keep' ? 0x22c55e : 0xef4444
+      );
       return;
     }
     this.sculptMesh.material.color.set(
@@ -423,17 +468,136 @@ export class MeshSelectionController {
     );
   }
 
+  ensureDebugSphereResources() {
+    if (!USE_DEBUG_SPHERE_BRUSH) {
+      return;
+    }
+
+    if (!this.sculptSphereGeometry) {
+      this.sculptSphereGeometry = new THREE.SphereGeometry(
+        1,
+        DEBUG_SPHERE_WIDTH_SEGMENTS,
+        DEBUG_SPHERE_HEIGHT_SEGMENTS
+      );
+    }
+
+    if (!this.sculptSphereMaterial) {
+      this.sculptSphereMaterial = new THREE.MeshBasicMaterial({
+        color: this.paintMode === 'keep' ? 0x22c55e : 0xef4444,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+      });
+    }
+  }
+
+  createDebugSphereMesh(capacity) {
+    const mesh = new THREE.InstancedMesh(
+      this.sculptSphereGeometry,
+      this.sculptSphereMaterial,
+      capacity
+    );
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+
+  ensureDebugSphereCapacity(requiredCount) {
+    if (!USE_DEBUG_SPHERE_BRUSH) {
+      return;
+    }
+
+    this.ensureDebugSphereResources();
+    if (!this.sculptMesh) {
+      return;
+    }
+
+    if (requiredCount <= this.sculptSphereCapacity) {
+      return;
+    }
+
+    const nextCapacity = Math.max(
+      requiredCount,
+      Math.max(this.sculptSphereCapacity * 2, DEBUG_SPHERE_INITIAL_CAPACITY)
+    );
+    const nextMesh = this.createDebugSphereMesh(nextCapacity);
+    this.overlay.remove(this.sculptMesh);
+    this.sculptMesh = nextMesh;
+    this.disableReticleRaycast(this.sculptMesh);
+    this.sculptSphereCapacity = nextCapacity;
+    this.overlay.add(this.sculptMesh);
+    this.refreshDebugSphereInstances();
+  }
+
+  refreshDebugSphereInstances() {
+    if (!USE_DEBUG_SPHERE_BRUSH || !this.sculptMesh) {
+      return;
+    }
+
+    this.ensureDebugSphereCapacity(this.visualStrokePoints.length);
+    const radius = Math.max(this.visualBrushRadius, 0.01);
+    this._tmpSphereScale.setScalar(radius);
+
+    let count = 0;
+    for (const point of this.visualStrokePoints) {
+      this._tmpInstanceMatrix.compose(
+        point,
+        IDENTITY_QUATERNION,
+        this._tmpSphereScale
+      );
+      this.sculptMesh.setMatrixAt(count, this._tmpInstanceMatrix);
+      count += 1;
+    }
+
+    this.sculptMesh.count = count;
+    this.sculptMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  appendDebugSphereInstance(point) {
+    if (!USE_DEBUG_SPHERE_BRUSH) {
+      return;
+    }
+
+    if (!this.sculptMesh) {
+      this.ensureSculptMesh();
+    }
+    if (!this.sculptMesh) {
+      return;
+    }
+
+    const nextCount = this.visualStrokePoints.length;
+    this.ensureDebugSphereCapacity(nextCount);
+
+    const radius = Math.max(this.visualBrushRadius, 0.01);
+    this._tmpSphereScale.setScalar(radius);
+    this._tmpInstanceMatrix.compose(
+      point,
+      IDENTITY_QUATERNION,
+      this._tmpSphereScale
+    );
+    this.sculptMesh.setMatrixAt(nextCount - 1, this._tmpInstanceMatrix);
+    this.sculptMesh.count = nextCount;
+    this.sculptMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  disposeDebugSphereResources() {
+    this.sculptSphereGeometry?.dispose?.();
+    this.sculptSphereMaterial?.dispose?.();
+    this.sculptSphereGeometry = null;
+    this.sculptSphereMaterial = null;
+    this.sculptSphereCapacity = 0;
+  }
+
   clearSculptMesh() {
     this.strokeWorldPoints = [];
+    this.visualStrokePoints = [];
     if (!this.sculptMesh) {
       return;
     }
     this.overlay.remove(this.sculptMesh);
     if (USE_DEBUG_SPHERE_BRUSH) {
-      for (const child of this.sculptMesh.children || []) {
-        child.geometry?.dispose?.();
-        child.material?.dispose?.();
-      }
+      this.sculptMesh.count = 0;
     } else {
       this.sculptMesh.material?.dispose?.();
       this.sculptMesh.geometry?.dispose?.();
@@ -447,26 +611,7 @@ export class MeshSelectionController {
     }
 
     if (USE_DEBUG_SPHERE_BRUSH) {
-      for (const child of [...this.sculptMesh.children]) {
-        this.sculptMesh.remove(child);
-        child.geometry?.dispose?.();
-        child.material?.dispose?.();
-      }
-      const color = this.paintMode === 'keep' ? 0x22c55e : 0xef4444;
-      const radius = Math.max(this.visualBrushRadius, 0.01);
-      for (const point of this.strokeWorldPoints) {
-        const sphere = new THREE.Mesh(
-          new THREE.SphereGeometry(radius, 12, 12),
-          new THREE.MeshStandardMaterial({
-            color,
-            transparent: true,
-            opacity: 0.45,
-            depthWrite: false,
-          })
-        );
-        sphere.position.copy(point);
-        this.sculptMesh.add(sphere);
-      }
+      this.refreshDebugSphereInstances();
       return;
     }
 
@@ -499,8 +644,13 @@ export class MeshSelectionController {
 
   appendStrokePoint(worldPoint) {
     if (!this.strokeWorldPoints.length) {
-      this.strokeWorldPoints.push(worldPoint.clone());
-      this.rebuildSculptMesh();
+      const point = worldPoint.clone();
+      this.strokeWorldPoints.push(point);
+      if (USE_DEBUG_SPHERE_BRUSH) {
+        this.appendVisualStrokePoint(point);
+      } else {
+        this.rebuildSculptMesh();
+      }
       return;
     }
 
@@ -512,9 +662,15 @@ export class MeshSelectionController {
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       this._tmpInterpPoint.copy(lastPoint).lerp(worldPoint, t);
-      this.strokeWorldPoints.push(this._tmpInterpPoint.clone());
+      const point = this._tmpInterpPoint.clone();
+      this.strokeWorldPoints.push(point);
+      if (USE_DEBUG_SPHERE_BRUSH) {
+        this.appendVisualStrokePoint(point);
+      }
     }
-    this.rebuildSculptMesh();
+    if (!USE_DEBUG_SPHERE_BRUSH) {
+      this.rebuildSculptMesh();
+    }
   }
 
   applyStrokeToSelection() {
@@ -625,6 +781,7 @@ export class MeshSelectionController {
     this.isPinching = true;
     this.activePinchSource = event.target;
     this.strokeWorldPoints = [];
+    this.visualStrokePoints = [];
     this.ensureSculptMesh();
     this.sampleDrawFromSource(event.target, true);
   }
@@ -664,6 +821,8 @@ export class MeshSelectionController {
     this.sampleDrawFromSource(this.activePinchSource);
   }
 }
+
+
 
 
 
