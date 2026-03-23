@@ -25,6 +25,8 @@ const USER_CAPTURE_PREVIEW_MS = 4000;
 const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
+const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
+const DEV_UI_SWITCH_HOLD_MS = 900;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -122,7 +124,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.apiClient = new Sam3dApiClient();
     this.sessionId = `session-${crypto.randomUUID()}`;
     this.debugUiEnabled = DEBUG_UI;
-    this.userFlowMode = DEBUG_UI ? null : 'generate';
+    this.devUiSwitchEnabled = ENABLE_DEV_UI_SWITCH;
+    this.userFlowMode = 'generate';
     this.userFlowWorkspaceId = null;
     this.userFlowAwaitingPromptConfirmation = false;
     this.recordingPurpose = 'prompt';
@@ -151,6 +154,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.environmentTexture = null;
     this.previousEnvironment = null;
     this.workspaceState = this.createEmptyWorkspaceState();
+    this.devUiSwitchHoldButton = null;
+    this.devUiSwitchHoldStartMs = 0;
+    this.devUiSwitchHoldTriggered = false;
+    this.devUiToggleKeyHandler = (event) => this.handleDevUiKeyDown(event);
   }
 
   createEmptyWorkspaceState() {
@@ -177,6 +184,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshCatalogUi();
     this.refreshWorkspaceCatalogUi();
     this.setDebugPanelVisibility(this.debugUiEnabled);
+    if (this.devUiSwitchEnabled) {
+      window.addEventListener('keydown', this.devUiToggleKeyHandler);
+      console.info(
+        'Developer UI switch enabled. Hold the footer version text in XR or press Shift+D on desktop to toggle debug UI.'
+      );
+    }
     this.updateUserFlowUi();
     this.setStatus(
       this.debugUiEnabled
@@ -397,14 +410,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingX: 0.03,
     });
 
-    mainGrid.addRow({weight: 0.08}).addText({
+    const mainFooterRow = mainGrid.addRow({weight: 0.08});
+    this.mainVersionButton = mainFooterRow.addTextButton({
       text: 'Version: ' + SAMPLE_VERSION,
-      fontSizeDp: 12,
+      backgroundColor: '#00000000',
       fontColor: '#94a3b8',
+      fontSizeDp: 12,
+      opacity: 0.0,
       anchorX: 'left',
       textAlign: 'left',
       paddingX: 0.03,
+      width: 0.96,
+      height: 0.6,
     });
+    this.configureDevUiSwitchButton(this.mainVersionButton);
 
     this.mainPanel.updateLayouts();
 
@@ -959,17 +978,23 @@ export class Sam3dWorkspaceScene extends xb.Script {
       }
     }
 
-    userGrid.addRow({weight: 0.1}).addText({
-      text: 'Use ?debugUi=true to open the full operator panels.',
-      fontSizeDp: 12,
+    const userFooterRow = userGrid.addRow({weight: 0.1});
+    this.userFlowVersionButton = userFooterRow.addTextButton({
+      text: 'v ' + SAMPLE_VERSION,
+      backgroundColor: '#00000000',
       fontColor: '#94a3b8',
+      fontSizeDp: 12,
+      opacity: 0.0,
       anchorX: 'left',
       anchorY: 'top',
       textAlign: 'left',
       maxWidth: 0.92,
       paddingX: 0.03,
       paddingY: 0.01,
+      width: 0.96,
+      height: 0.6,
     });
+    this.configureDevUiSwitchButton(this.userFlowVersionButton);
 
     this.userFlowPanel.updateLayouts();
   }
@@ -980,6 +1005,89 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.transformPanel.visible = visible;
     this.libraryPanel.visible = visible;
     this.userFlowPanel.visible = !visible;
+  }
+
+  getUserFlowModeLabel() {
+    const mode = this.userFlowMode || 'generate';
+    return mode.charAt(0).toUpperCase() + mode.slice(1);
+  }
+
+  clearDevUiSwitchHold() {
+    this.devUiSwitchHoldButton = null;
+    this.devUiSwitchHoldStartMs = 0;
+    this.devUiSwitchHoldTriggered = false;
+  }
+
+  configureDevUiSwitchButton(button) {
+    if (!button) return;
+    button.onTriggered = () => {};
+
+    if (!this.devUiSwitchEnabled) {
+      button.selectable = false;
+      button.ignoreReticleRaycast = true;
+      return;
+    }
+
+    button.selectable = true;
+    button.ignoreReticleRaycast = false;
+    button.onSelectStart = () => {
+      this.devUiSwitchHoldButton = button;
+      this.devUiSwitchHoldStartMs = performance.now();
+      this.devUiSwitchHoldTriggered = false;
+    };
+    button.onSelecting = () => {
+      if (this.devUiSwitchHoldButton !== button || this.devUiSwitchHoldTriggered) {
+        return;
+      }
+      if (performance.now() - this.devUiSwitchHoldStartMs >= DEV_UI_SWITCH_HOLD_MS) {
+        this.devUiSwitchHoldTriggered = true;
+        this.toggleDeveloperUiShell();
+      }
+    };
+    button.onSelectEnd = () => {
+      if (this.devUiSwitchHoldButton === button) {
+        this.clearDevUiSwitchHold();
+      }
+    };
+  }
+
+  handleDevUiKeyDown(event) {
+    if (!this.devUiSwitchEnabled || event.repeat) {
+      return;
+    }
+
+    if (event.shiftKey && event.key?.toLowerCase() === 'd') {
+      event.preventDefault();
+      this.toggleDeveloperUiShell();
+    }
+  }
+
+  toggleDeveloperUiShell() {
+    if (!this.devUiSwitchEnabled) {
+      return;
+    }
+
+    this.clearDevUiSwitchHold();
+    this.setDebugUiEnabled(!this.debugUiEnabled);
+  }
+
+  setDebugUiEnabled(enabled) {
+    if (this.debugUiEnabled === enabled) {
+      return;
+    }
+
+    if (!enabled && !this.workspaceState.assets.length && this.userFlowMode !== 'generate') {
+      this.userFlowMode = 'generate';
+    }
+
+    this.debugUiEnabled = enabled;
+    this.setDebugPanelVisibility(enabled);
+    this.syncSelectionController();
+    this.syncTransformGizmo();
+    this.updateTransformUi();
+    this.updateUserFlowUi();
+    this.refreshPromptText();
+    this.setStatus(enabled ? 'Debug UI enabled.' : this.getUserFlowModeLabel() + ' flow restored.');
   }
 
   configureUserFlowButton(index, {
@@ -3252,6 +3360,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   dispose() {
+    if (this.devUiSwitchEnabled) {
+      window.removeEventListener('keydown', this.devUiToggleKeyHandler);
+    }
+    this.clearDevUiSwitchHold();
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
