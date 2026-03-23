@@ -1019,6 +1019,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const waitingForConfirm =
       this.userFlowMode === 'generate' && this.userFlowAwaitingPromptConfirmation;
 
+    const SLOT_PRIMARY_LEFT = 0;
+    const SLOT_PRIMARY_RIGHT = 1;
+    const SLOT_PREVIOUS = 2;
+    const SLOT_NEXT = 3;
+    const SLOT_SECONDARY_LEFT = 4;
+    const SLOT_SECONDARY_RIGHT = 5;
+    const SLOT_MODE_BACK = 6;
+    const SLOT_MODE_FORWARD = 7;
+    const SLOT_DELETE = 8;
+
     for (let i = 0; i < this.userFlowButtons.length; i++) {
       this.configureUserFlowButton(i, {visible: false});
     }
@@ -1029,7 +1039,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         ? `Prompt: ${this.currentPrompt || '(empty)'}\nSay yes or no, or use the buttons below.`
         : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
 
-      this.configureUserFlowButton(0, {
+      this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
         text: this.isRecordingPrompt
           ? 'Stop'
           : waitingForConfirm
@@ -1038,24 +1048,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
         backgroundColor: '#9a3412',
         onTriggered: () => this.handleUserFlowRecordAction(),
       });
-      this.configureUserFlowButton(1, {
+      this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
         text: 'Confirm',
-        backgroundColor: waitingForConfirm ? '#2563eb' : '#1f2937',
+        backgroundColor: waitingForConfirm ? MODE_GENERATE_COLOR : '#1f2937',
         onTriggered: () => this.confirmUserFlowGeneratePrompt(),
         visible: waitingForConfirm,
       });
-      this.configureUserFlowButton(2, {
+      this.configureUserFlowButton(SLOT_SECONDARY_RIGHT, {
         text: 'Cancel',
         backgroundColor: '#6b7280',
         onTriggered: () => this.cancelUserFlowGeneratePrompt(),
         visible: waitingForConfirm,
       });
-      this.configureUserFlowButton(3, {
+      this.configureUserFlowButton(SLOT_MODE_FORWARD, {
         text: 'To Segment',
         backgroundColor: hasAssets ? MODE_SEGMENT_COLOR : '#1f2937',
         onTriggered: () => this.enterSegmentMode(),
       });
-      this.configureUserFlowButton(8, {
+      this.configureUserFlowButton(SLOT_DELETE, {
         text: 'Delete Asset',
         backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
@@ -1066,72 +1076,68 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.userFlowDetailText.text =
         `${activeAssetInfo}\nKept-only view stays on. Use the selection tool to mark what to keep or discard.`;
 
-      this.configureUserFlowButton(0, {
+      this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
         text: this.isSelectionMode ? 'Select: ON' : 'Select: OFF',
         backgroundColor: this.isSelectionMode ? '#0f766e' : '#374151',
         onTriggered: () => this.toggleSelectionMode(),
       });
-      this.configureUserFlowButton(1, {
+      this.configureUserFlowButton(SLOT_PRIMARY_RIGHT, {
         text: this.selectionController?.getPaintMode?.() === 'keep' ? 'Mode: Keep' : 'Mode: Drop',
         backgroundColor: this.selectionController?.getPaintMode?.() === 'keep' ? '#166534' : '#991b1b',
         onTriggered: () => this.togglePaintMode(),
       });
-      this.configureUserFlowButton(2, {
+      this.configureUserFlowButton(SLOT_PREVIOUS, {
         text: 'Previous',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(-1),
       });
-      this.configureUserFlowButton(3, {
+      this.configureUserFlowButton(SLOT_NEXT, {
         text: 'Next',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(1),
       });
-      this.configureUserFlowButton(4, {
+      this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
         text: 'Save Sel',
         backgroundColor: '#065f46',
         onTriggered: () => this.saveUserFlowWorkspaceSelection(),
       });
-      this.configureUserFlowButton(5, {
+      this.configureUserFlowButton(SLOT_SECONDARY_RIGHT, {
         text: 'Load Sel',
         backgroundColor: '#1d4ed8',
         onTriggered: () => this.loadUserFlowWorkspaceSelection(),
       });
-      this.configureUserFlowButton(6, {
+      this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Generate',
         backgroundColor: MODE_GENERATE_COLOR,
         onTriggered: () => this.enterGenerateMode(),
       });
-      this.configureUserFlowButton(7, {
+      this.configureUserFlowButton(SLOT_MODE_FORWARD, {
         text: 'To Compose',
         backgroundColor: hasAssets ? MODE_COMPOSE_COLOR : '#1f2937',
         onTriggered: () => this.enterComposeMode(),
       });
-      this.configureUserFlowButton(8, {
+      this.configureUserFlowButton(SLOT_DELETE, {
         text: 'Delete Asset',
         backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
+        visible: hasAssets,
       });
     } else if (this.userFlowMode === 'compose') {
       this.userFlowModeText.text = 'Compose';
       this.userFlowDetailText.text =
         `${activeAssetInfo}\nTransform one asset at a time with the gizmo, then compose the current workspace.`;
 
-      this.configureUserFlowButton(0, {
+      this.configureUserFlowButton(SLOT_PREVIOUS, {
         text: 'Previous',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(-1),
       });
-      this.configureUserFlowButton(1, {
+      this.configureUserFlowButton(SLOT_NEXT, {
         text: 'Next',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(1),
       });
-      this.configureUserFlowButton(6, {
-        text: 'Compose',
-        backgroundColor: hasAssets ? '#7c3aed' : '#1f2937',
-        onTriggered: () => this.composeUserFlowWorkspace(),
-      });
-      this.configureUserFlowButton(7, {
+      this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Segment',
         backgroundColor: MODE_SEGMENT_COLOR,
         onTriggered: () => this.enterSegmentMode({
@@ -1139,10 +1145,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
           statusText: 'Segment mode resumed. Continue refining selections.',
         }),
       });
-      this.configureUserFlowButton(8, {
+      this.configureUserFlowButton(SLOT_MODE_FORWARD, {
+        text: 'Compose',
+        backgroundColor: hasAssets ? MODE_COMPOSE_COLOR : '#1f2937',
+        onTriggered: () => this.composeUserFlowWorkspace(),
+      });
+      this.configureUserFlowButton(SLOT_DELETE, {
         text: 'Delete Asset',
         backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
+        visible: hasAssets,
       });
     }
   }
