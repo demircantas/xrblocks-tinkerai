@@ -26,7 +26,7 @@ const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
-const DEV_UI_SWITCH_HOLD_MS = 900;
+const DEV_UI_SWITCH_HOLD_MS = 1800;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -411,17 +411,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     const mainFooterRow = mainGrid.addRow({weight: 0.08});
-    this.mainVersionButton = mainFooterRow.addTextButton({
+    mainFooterRow.addCol({weight: 0.68}).addText({
       text: 'Version: ' + SAMPLE_VERSION,
-      backgroundColor: '#00000000',
       fontColor: '#94a3b8',
       fontSizeDp: 12,
-      opacity: 0.0,
       anchorX: 'left',
+      anchorY: 'center',
       textAlign: 'left',
       paddingX: 0.03,
-      width: 0.96,
-      height: 0.6,
+      maxWidth: 0.92,
+    });
+    this.mainVersionButton = mainFooterRow.addCol({weight: 0.32}).addTextButton({
+      text: this.debugUiEnabled ? 'Flow UI' : 'Debug UI',
+      backgroundColor: this.debugUiEnabled ? MODE_GENERATE_COLOR : '#b45309',
+      fontColor: '#ffffff',
+      fontSizeDp: 12,
+      opacity: 0.98,
+      width: 0.44,
+      height: 0.32,
     });
     this.configureDevUiSwitchButton(this.mainVersionButton);
 
@@ -979,22 +986,28 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     const userFooterRow = userGrid.addRow({weight: 0.1});
-    this.userFlowVersionButton = userFooterRow.addTextButton({
+    userFooterRow.addCol({weight: 0.68}).addText({
       text: 'v ' + SAMPLE_VERSION,
-      backgroundColor: '#00000000',
       fontColor: '#94a3b8',
       fontSizeDp: 12,
-      opacity: 0.0,
       anchorX: 'left',
       anchorY: 'top',
       textAlign: 'left',
       maxWidth: 0.92,
       paddingX: 0.03,
       paddingY: 0.01,
-      width: 0.96,
-      height: 0.6,
+    });
+    this.userFlowVersionButton = userFooterRow.addCol({weight: 0.32}).addTextButton({
+      text: this.debugUiEnabled ? 'Flow UI' : 'Debug UI',
+      backgroundColor: this.debugUiEnabled ? MODE_GENERATE_COLOR : '#b45309',
+      fontColor: '#ffffff',
+      fontSizeDp: 12,
+      opacity: 0.98,
+      width: 0.44,
+      height: 0.32,
     });
     this.configureDevUiSwitchButton(this.userFlowVersionButton);
+    this.updateDevUiSwitchButtons();
 
     this.userFlowPanel.updateLayouts();
   }
@@ -1051,6 +1064,19 @@ export class Sam3dWorkspaceScene extends xb.Script {
     };
   }
 
+  updateDevUiSwitchButtons() {
+    const label = this.debugUiEnabled ? 'Flow UI' : 'Debug UI';
+    const backgroundColor = this.debugUiEnabled ? MODE_GENERATE_COLOR : '#b45309';
+    for (const button of [this.mainVersionButton, this.userFlowVersionButton]) {
+      if (!button) continue;
+      button.text = label;
+      button.fontColor = '#ffffff';
+      button.opacity = this.devUiSwitchEnabled ? 0.98 : 0.0;
+      button.visible = this.devUiSwitchEnabled;
+      applyTextButtonBackgroundColor(button, this.devUiSwitchEnabled ? backgroundColor : '#00000000');
+    }
+  }
+
   handleDevUiKeyDown(event) {
     if (!this.devUiSwitchEnabled || event.repeat) {
       return;
@@ -1082,6 +1108,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.debugUiEnabled = enabled;
     this.setDebugPanelVisibility(enabled);
+    this.updateDevUiSwitchButtons();
     this.syncSelectionController();
     this.syncTransformGizmo();
     this.updateTransformUi();
