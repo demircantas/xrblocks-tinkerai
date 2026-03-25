@@ -1566,6 +1566,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.userFlowDetailText.text =
         `${activeAssetInfo}\nTransform one asset at a time with the gizmo, then compose the current workspace.`;
 
+      this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
+        text: 'Duplicate',
+        backgroundColor: hasAssets ? '#475569' : '#1f2937',
+        onTriggered: () => this.duplicateActiveAsset(),
+        visible: hasAssets,
+      });
+
       this.configureUserFlowButton(SLOT_PREVIOUS, {
         text: 'Previous',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
@@ -1946,6 +1953,49 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Active asset set to ' + nextAsset.assetId + '.');
   }
 
+  createDuplicateAssetId(assetId) {
+    return `${assetId}-copy-${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  getDuplicatedTransformMatrix(transformMatrix) {
+    if (!transformMatrix) {
+      return null;
+    }
+
+    const matrix = new THREE.Matrix4().fromArray(transformMatrix);
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    matrix.decompose(position, quaternion, scale);
+    position.x += 0.08;
+    position.z += 0.08;
+
+    return new THREE.Matrix4().compose(position, quaternion, scale).toArray();
+  }
+
+  async duplicateActiveAsset() {
+    const sourceRecord = this.activeAssetId ? this.getAssetRecord(this.activeAssetId) : null;
+    if (!sourceRecord) {
+      this.setStatus('No active asset is selected to duplicate.');
+      return;
+    }
+
+    const duplicatedAssetId = this.createDuplicateAssetId(sourceRecord.assetId);
+    const duplicatedRecord = {
+      ...sourceRecord,
+      assetId: duplicatedAssetId,
+      transformMatrix: this.getDuplicatedTransformMatrix(
+        normalizeTransformMatrix(sourceRecord)
+      ),
+      selections: (sourceRecord.selections || []).map((selection) => ({
+        ...selection,
+        vertexIndices: [...(selection.vertexIndices || [])],
+      })),
+    };
+
+    await this.instantiateAssetRecord(duplicatedRecord);
+    this.setStatus('Duplicated ' + sourceRecord.assetId + ' as ' + duplicatedAssetId + '.');
+  }
   deleteActiveAssetFromWorkspace() {
     const assetCount = this.workspaceState.assets.length;
     if (!assetCount || !this.activeAssetId) {
