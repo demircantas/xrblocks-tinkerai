@@ -34,7 +34,6 @@ export class TransformGizmoController {
     this.target = null;
     this.enabled = false;
     this.activeInteraction = null;
-    this.variant = 'full';
 
     this.raycaster = new THREE.Raycaster();
     this.bounds = new THREE.Box3();
@@ -95,12 +94,6 @@ export class TransformGizmoController {
     this.root.visible = this.enabled;
   }
 
-  setVariant(variant = 'full') {
-    this.variant = variant === 'light' ? 'light' : 'full';
-    this.stopInteraction();
-    this.updateHandleVisibility();
-    this.update();
-  }
 
   isInteracting() {
     return !!this.activeInteraction;
@@ -147,7 +140,6 @@ export class TransformGizmoController {
     for (const mesh of this.handles) {
       mesh.ignoreReticleRaycast = !!xb.core.renderer?.xr?.isPresenting;
     }
-    this.updateHandleVisibility();
     this.updateTargetWorldPose();
     this.updateGizmoPose();
 
@@ -229,20 +221,7 @@ export class TransformGizmoController {
     return mesh;
   }
 
-  updateHandleVisibility() {
-    for (const mesh of this.handles) {
-      const handle = mesh.userData?.transformHandle;
-      if (!handle) continue;
-      mesh.visible = this.isHandleVisible(handle);
-    }
-  }
 
-  isHandleVisible(handle) {
-    if (this.variant !== 'light') {
-      return true;
-    }
-    return handle.type === 'move' || handle.name === 'rotateY';
-  }
 
   updateTargetWorldPose() {
     this.target.updateMatrixWorld(true);
@@ -314,7 +293,7 @@ export class TransformGizmoController {
     for (const intersection of intersections) {
       let current = intersection.object;
       while (current) {
-        if (current.userData?.transformHandle && this.isHandleVisible(current.userData.transformHandle)) {
+        if (current.userData?.transformHandle) {
           return {
             intersection,
             object: current,
@@ -341,7 +320,6 @@ export class TransformGizmoController {
     for (const mesh of this.handles) {
       const handle = mesh.userData?.transformHandle;
       if (!handle) continue;
-      if (!this.isHandleVisible(handle)) continue;
       const localPoint = mesh.worldToLocal(controllerWorld.clone());
       let score = Infinity;
       let hitPointLocal = null;
@@ -349,12 +327,7 @@ export class TransformGizmoController {
       if (handle.type === 'rotate') {
         const radial = Math.sqrt(localPoint.x * localPoint.x + localPoint.y * localPoint.y);
         const tubeDistance = Math.sqrt((radial - 1) * (radial - 1) + localPoint.z * localPoint.z);
-        const torusThreshold =
-          this.variant === 'light' && handle.name === 'rotateY'
-            ? DIRECT_GRAB_TORUS_THRESHOLD * 1.6
-            : DIRECT_GRAB_TORUS_THRESHOLD;
-        score = tubeDistance;
-        if (tubeDistance <= torusThreshold) {
+        if (tubeDistance <= DIRECT_GRAB_TORUS_THRESHOLD) {
           const safeRadial = radial > 1e-5 ? radial : 1;
           hitPointLocal = new THREE.Vector3(localPoint.x / safeRadial, localPoint.y / safeRadial, 0);
         }
@@ -556,9 +529,6 @@ export class TransformGizmoController {
   }
 
   getHandleAxisWorld(axis) {
-    if (this.variant === 'light' && axis === 'y') {
-      return this.tmpVector.copy(WORLD_UP).normalize().clone();
-    }
     const localAxis = axis === 'x' ? X_AXIS : axis === 'y' ? Y_AXIS : Z_AXIS;
     return this.tmpVector.copy(localAxis).applyQuaternion(this.targetWorldQuaternion).normalize().clone();
   }

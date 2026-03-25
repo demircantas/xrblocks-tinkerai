@@ -1334,7 +1334,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     } else if (this.userFlowMode === 'compose') {
       this.userFlowModeText.text = 'Compose';
       this.userFlowDetailText.text =
-        `${activeAssetInfo}\nMove with the center handle, rotate with the green turntable ring, then compose the current workspace.`;
+        `${activeAssetInfo}\nTransform one asset at a time with the gizmo, then compose the current workspace.`;
 
       this.configureUserFlowButton(SLOT_PREVIOUS, {
         text: 'Previous',
@@ -2568,9 +2568,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     const activeModel = this.activeAssetId ? this.getAssetRoot(this.activeAssetId) : null;
-    this.transformGizmoController.setVariant(
-      this.debugUiEnabled || this.userFlowMode === 'compose' ? 'full' : 'light'
-    );
     this.transformGizmoController.setTarget(activeModel || null, {
       enabled: !!activeModel && !this.isSelectionMode && this.shouldEnableTransformTools(),
     });
@@ -2796,7 +2793,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         ? 'Compose mode started. Reset temporary preview pose for ' +
             restoredAssetIds.length +
             ' asset(s).'
-        : 'Compose mode started. Use the light gizmo to move and turn assets, then compose the workspace.'
+        : 'Compose mode started. Transform one asset at a time with the gizmo, then compose the workspace.'
     );
   }
 
