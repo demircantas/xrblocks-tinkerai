@@ -1269,6 +1269,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
         onTriggered: () => this.cancelUserFlowGeneratePrompt(),
         visible: waitingForConfirm,
       });
+      this.configureUserFlowButton(SLOT_PREVIOUS, {
+        text: 'Previous',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(-1),
+        visible: hasAssets,
+      });
+      this.configureUserFlowButton(SLOT_NEXT, {
+        text: 'Next',
+        backgroundColor: hasAssets ? '#334155' : '#1f2937',
+        onTriggered: () => this.stepActiveAsset(1),
+        visible: hasAssets,
+      });
       this.configureUserFlowButton(SLOT_MODE_FORWARD, {
         text: 'To Segment',
         backgroundColor: hasAssets ? MODE_SEGMENT_COLOR : '#1f2937',
@@ -1304,16 +1316,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
         text: 'Next',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(1),
-      });
-      this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
-        text: 'Save Sel',
-        backgroundColor: '#065f46',
-        onTriggered: () => this.saveUserFlowWorkspaceSelection(),
-      });
-      this.configureUserFlowButton(SLOT_SECONDARY_RIGHT, {
-        text: 'Load Sel',
-        backgroundColor: '#1d4ed8',
-        onTriggered: () => this.loadUserFlowWorkspaceSelection(),
       });
       this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Generate',
@@ -2740,8 +2742,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       ? this.activeAssetId
       : this.workspaceState.assets[0].assetId;
     this.setActiveAsset(nextActiveAssetId);
-    this.isSelectionMode = true;
-    this.selectionController?.setDrawMode(true);
+    this.isSelectionMode = false;
+    this.selectionController?.setDrawMode(false);
     this.applyWorkspaceInteractionPolicy();
     this.updateSelectionUi();
   }
