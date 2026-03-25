@@ -136,6 +136,9 @@ export class TransformGizmoController {
     }
 
     this.root.visible = true;
+    for (const mesh of this.handles) {
+      mesh.ignoreReticleRaycast = !!xb.core.renderer?.xr?.isPresenting;
+    }
     this.updateTargetWorldPose();
     this.updateGizmoPose();
 
@@ -279,6 +282,10 @@ export class TransformGizmoController {
   }
 
   findHandleHit(controller) {
+    if (xb.core.renderer?.xr?.isPresenting) {
+      return this.findHandleByProximity(controller);
+    }
+
     const intersections = xb.core.input?.intersectionsForController?.get(controller) || [];
     for (const intersection of intersections) {
       let current = intersection.object;

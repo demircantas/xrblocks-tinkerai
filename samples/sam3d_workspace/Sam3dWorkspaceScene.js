@@ -27,6 +27,9 @@ const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
 const DEV_UI_SWITCH_HOLD_MS = 1800;
+const PANEL_DRAG_ZONE_THICKNESS = 0.12;
+const PANEL_DRAG_ZONE_CORNER_SIZE = 0.18;
+const PANEL_DRAG_ZONE_DEPTH = 0.002;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -131,6 +134,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.recordingPurpose = 'prompt';
     this.confirmationTranscript = '';
     this.userCapturePreviewTimer = null;
+    this.userFlowPromptCaptureTimer = null;
+    this.userFlowPromptCapturePromise = null;
+    this.userFlowPromptCaptureResolve = null;
+    this.panelDragHandles = new Map();
     this.currentPrompt = getUrlParamString('prompt', DEFAULT_PROMPT);
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
@@ -171,6 +178,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   init() {
     xb.core.input.addReticles();
+    xb.showReticleOnDepthMesh?.(false);
     this.setupEnvironmentLighting();
     this.addLights();
     this.createWorkspaceUI();
@@ -187,7 +195,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.devUiSwitchEnabled) {
       window.addEventListener('keydown', this.devUiToggleKeyHandler);
       console.info(
-        'Developer UI switch enabled. Hold the footer version text in XR or press Shift+D on desktop to toggle debug UI.'
+        'Developer UI switch enabled. Hold the footer Debug UI / Flow UI button in XR or press Shift+D on desktop to toggle debug UI.'
       );
     }
     this.updateUserFlowUi();
@@ -222,11 +230,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
       width: 0.62,
       height: 0.92,
       backgroundColor: '#1f2937EE',
+      draggable: false,
+      useBorderlessShader: false,
       useDefaultPosition: false,
     });
     this.mainPanel.isRoot = true;
     this.mainPanel.position.set(-0.36, xb.user.height + 0.03, -0.9);
     this.add(this.mainPanel);
+    this.mainPanel.userData.isWorkspaceUiRoot = true;
 
     const mainGrid = this.mainPanel.addGrid();
 
@@ -433,16 +444,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.configureDevUiSwitchButton(this.mainVersionButton);
 
     this.mainPanel.updateLayouts();
+    this.attachPanelDragHandles(this.mainPanel);
 
     this.selectionPanel = new xb.SpatialPanel({
       width: 0.48,
       height: 0.54,
       backgroundColor: '#111827EE',
+      draggable: false,
+      useBorderlessShader: false,
       useDefaultPosition: false,
     });
     this.selectionPanel.isRoot = true;
     this.selectionPanel.position.set(0.34, xb.user.height + 0.22, -0.82);
     this.add(this.selectionPanel);
+    this.selectionPanel.userData.isWorkspaceUiRoot = true;
 
     const selectionGrid = this.selectionPanel.addGrid();
     selectionGrid.addRow({weight: 0.12}).addText({
@@ -520,16 +535,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.selectionPanel.updateLayouts();
+    this.attachPanelDragHandles(this.selectionPanel);
 
     this.transformPanel = new xb.SpatialPanel({
       width: 0.44,
       height: 0.62,
       backgroundColor: '#0f172aEE',
+      draggable: false,
+      useBorderlessShader: false,
       useDefaultPosition: false,
     });
     this.transformPanel.isRoot = true;
     this.transformPanel.position.set(-0.01, xb.user.height - 0.22, -0.82);
     this.add(this.transformPanel);
+    this.transformPanel.userData.isWorkspaceUiRoot = true;
 
     const transformGrid = this.transformPanel.addGrid();
     transformGrid.addRow({weight: 0.12}).addText({
@@ -699,16 +718,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.transformPanel.updateLayouts();
+    this.attachPanelDragHandles(this.transformPanel);
 
     this.libraryPanel = new xb.SpatialPanel({
       width: 0.48,
       height: 0.98,
       backgroundColor: '#172554EE',
+      draggable: false,
+      useBorderlessShader: false,
       useDefaultPosition: false,
     });
     this.libraryPanel.isRoot = true;
     this.libraryPanel.position.set(0.34, xb.user.height - 0.26, -0.82);
     this.add(this.libraryPanel);
+    this.libraryPanel.userData.isWorkspaceUiRoot = true;
 
     const libraryGrid = this.libraryPanel.addGrid();
     libraryGrid.addRow({weight: 0.12}).addText({
@@ -906,17 +929,22 @@ export class Sam3dWorkspaceScene extends xb.Script {
       width: 0.9,
       height: 0.58,
     });
-    this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();    this.libraryPanel.updateLayouts();
+    this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();
+    this.libraryPanel.updateLayouts();
+    this.attachPanelDragHandles(this.libraryPanel);
 
     this.userFlowPanel = new xb.SpatialPanel({
       width: 0.54,
       height: 0.94,
       backgroundColor: '#111827EE',
+      draggable: false,
+      useBorderlessShader: false,
       useDefaultPosition: false,
     });
     this.userFlowPanel.isRoot = true;
     this.userFlowPanel.position.set(0, xb.user.height, -0.82);
     this.add(this.userFlowPanel);
+    this.userFlowPanel.userData.isWorkspaceUiRoot = true;
 
     const userGrid = this.userFlowPanel.addGrid();
     this.userFlowModeText = userGrid.addRow({weight: 0.1}).addText({
@@ -1010,6 +1038,92 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateDevUiSwitchButtons();
 
     this.userFlowPanel.updateLayouts();
+    this.attachPanelDragHandles(this.userFlowPanel);
+  }
+
+  attachPanelDragHandles(panel) {
+    if (!panel || this.panelDragHandles.has(panel)) {
+      return;
+    }
+
+    panel.draggable = true;
+    panel.draggingMode = xb.DragMode.TRANSLATING;
+
+    const zones = [];
+    const transparentMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.001,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    const createZone = (name, width, height, x, y) => {
+      const zone = new THREE.Mesh(
+        new THREE.PlaneGeometry(width, height),
+        transparentMaterial.clone()
+      );
+      zone.name = 'PanelDragZone:' + name;
+      zone.position.set(x, y, PANEL_DRAG_ZONE_DEPTH);
+      zone.draggingMode = xb.DragMode.TRANSLATING;
+      zone.ignoreReticleRaycast = false;
+      zone.userData.isPanelDragZone = true;
+      panel.add(zone);
+      zones.push(zone);
+    };
+
+    const halfX = panel.rangeX * 0.5;
+    const halfY = panel.rangeY * 0.5;
+    const edgeThickness = PANEL_DRAG_ZONE_THICKNESS;
+    const cornerSize = PANEL_DRAG_ZONE_CORNER_SIZE;
+
+    createZone('topEdge', Math.max(panel.rangeX - cornerSize * 2, edgeThickness), edgeThickness, 0, halfY - edgeThickness * 0.5);
+    createZone('bottomEdge', Math.max(panel.rangeX - cornerSize * 2, edgeThickness), edgeThickness, 0, -halfY + edgeThickness * 0.5);
+    createZone('leftEdge', edgeThickness, Math.max(panel.rangeY - cornerSize * 2, edgeThickness), -halfX + edgeThickness * 0.5, 0);
+    createZone('rightEdge', edgeThickness, Math.max(panel.rangeY - cornerSize * 2, edgeThickness), halfX - edgeThickness * 0.5, 0);
+
+    createZone('topLeft', cornerSize, cornerSize, -halfX + cornerSize * 0.5, halfY - cornerSize * 0.5);
+    createZone('topRight', cornerSize, cornerSize, halfX - cornerSize * 0.5, halfY - cornerSize * 0.5);
+    createZone('bottomLeft', cornerSize, cornerSize, -halfX + cornerSize * 0.5, -halfY + cornerSize * 0.5);
+    createZone('bottomRight', cornerSize, cornerSize, halfX - cornerSize * 0.5, -halfY + cornerSize * 0.5);
+
+    panel.traverse((child) => {
+      if (child === panel || child.userData?.isPanelDragZone) {
+        return;
+      }
+      child.draggingMode = xb.DragMode.DO_NOT_DRAG;
+    });
+
+    this.panelDragHandles.set(panel, {
+      zones,
+      lockedScale: panel.scale.clone(),
+    });
+  }
+
+  updatePanelDragHandles() {
+    if (!this.panelDragHandles?.size) {
+      return;
+    }
+
+    for (const [panel, entry] of this.panelDragHandles.entries()) {
+      if (!panel?.parent) {
+        continue;
+      }
+      if (entry?.lockedScale) {
+        panel.scale.copy(entry.lockedScale);
+      }
+    }
+  }
+
+  setPanelInteractionEnabled(panel, enabled) {
+    if (!panel) return;
+    panel.traverse((node) => {
+      if (node === panel) {
+        return;
+      }
+      node.ignoreReticleRaycast = !enabled;
+    });
+    panel.ignoreReticleRaycast = !enabled;
   }
 
   setDebugPanelVisibility(visible) {
@@ -1018,6 +1132,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.transformPanel.visible = visible;
     this.libraryPanel.visible = visible;
     this.userFlowPanel.visible = !visible;
+
+    this.setPanelInteractionEnabled(this.mainPanel, visible);
+    this.setPanelInteractionEnabled(this.selectionPanel, visible);
+    this.setPanelInteractionEnabled(this.transformPanel, visible);
+    this.setPanelInteractionEnabled(this.libraryPanel, visible);
+    this.setPanelInteractionEnabled(this.userFlowPanel, !visible);
   }
 
   getUserFlowModeLabel() {
@@ -1038,29 +1158,24 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!this.devUiSwitchEnabled) {
       button.selectable = false;
       button.ignoreReticleRaycast = true;
+      button.onObjectSelectStart = () => false;
+      button.onObjectSelectEnd = () => false;
       return;
     }
 
     button.selectable = true;
     button.ignoreReticleRaycast = false;
-    button.onSelectStart = () => {
+    button.onObjectSelectStart = () => {
       this.devUiSwitchHoldButton = button;
       this.devUiSwitchHoldStartMs = performance.now();
       this.devUiSwitchHoldTriggered = false;
+      return true;
     };
-    button.onSelecting = () => {
-      if (this.devUiSwitchHoldButton !== button || this.devUiSwitchHoldTriggered) {
-        return;
-      }
-      if (performance.now() - this.devUiSwitchHoldStartMs >= DEV_UI_SWITCH_HOLD_MS) {
-        this.devUiSwitchHoldTriggered = true;
-        this.toggleDeveloperUiShell();
-      }
-    };
-    button.onSelectEnd = () => {
+    button.onObjectSelectEnd = () => {
       if (this.devUiSwitchHoldButton === button) {
         this.clearDevUiSwitchHold();
       }
+      return true;
     };
   }
 
@@ -1171,14 +1286,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.userFlowMode === 'generate') {
       this.userFlowModeText.text = 'Generate';
       this.userFlowDetailText.text = waitingForConfirm
-        ? `Prompt: ${this.currentPrompt || '(empty)'}\nSay yes or no, or use the buttons below.`
+        ? `Prompt: ${this.currentPrompt || '(empty)'}\nReview the prompt, then confirm or cancel.`
         : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
 
       this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
         text: this.isRecordingPrompt
           ? 'Stop'
           : waitingForConfirm
-            ? 'Say Yes/No'
+            ? 'Re-record'
             : 'Push To Talk',
         backgroundColor: '#9a3412',
         onTriggered: () => this.handleUserFlowRecordAction(),
@@ -1297,6 +1412,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   createPromptKeyboard() {
     this.promptKeyboard = new Keyboard();
     this.add(this.promptKeyboard);
+    this.promptKeyboard.userData.isWorkspaceUiRoot = true;
     this.promptKeyboard.visible = false;
     this.promptKeyboard.position.set(0, -0.42, 0.1);
     this.promptKeyboard.setText(this.currentPrompt);
@@ -1322,6 +1438,63 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.promptKeyboard.traverse((node) => {
       node.ignoreReticleRaycast = !enabled;
     });
+  }
+
+  isUiTargetObject(target) {
+    let current = target;
+    while (current) {
+      if (current.userData?.isWorkspaceUiRoot) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
+
+  updateXrUiRayVisibility() {
+    if (!xb.core?.renderer?.xr?.isPresenting || !xb.core?.input?.controllers) {
+      return;
+    }
+
+    for (let i = 0; i < xb.core.input.controllers.length; i += 1) {
+      const controller = xb.core.input.controllers[i];
+      const intersections = xb.core.input.intersectionsForController?.get(controller) || [];
+      const uiIntersection = intersections.find((intersection) => this.isUiTargetObject(intersection?.object));
+      const uiTargeted = !!uiIntersection;
+
+      if (controller?.reticle) {
+        if (uiIntersection) {
+          controller.reticle.visible = true;
+          controller.reticle.intersection = uiIntersection;
+          controller.reticle.targetObject = uiIntersection.object;
+          if (typeof controller.reticle.setPoseFromIntersection === 'function') {
+            controller.reticle.setPoseFromIntersection(uiIntersection);
+          }
+          if (controller.reticle.direction && xb.user?.getReticleDirection) {
+            controller.reticle.direction.copy(xb.user.getReticleDirection(i));
+          }
+          if (typeof controller.reticle.setPressed === 'function') {
+            controller.reticle.setPressed(!!controller.userData?.selected);
+          }
+        } else {
+          controller.reticle.visible = false;
+          controller.reticle.targetObject = undefined;
+        }
+      }
+
+      controller?.traverse?.((child) => {
+        const isControllerRayVisual =
+          child?.constructor?.name === 'ControllerRayVisual' ||
+          (child instanceof THREE.Line && child.geometry?.attributes?.position?.count === 2);
+        if (!isControllerRayVisual) {
+          return;
+        }
+        child.visible = uiTargeted;
+        if (uiIntersection?.distance && child.scale) {
+          child.scale.z = Math.max(uiIntersection.distance, 0.02);
+        }
+      });
+    }
   }
 
   createSelectionController() {
@@ -1391,6 +1564,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     recognizer.addEventListener('error', (event) => {
       this.isRecordingPrompt = false;
       this.recordingPurpose = 'prompt';
+      this.clearUserFlowPromptCaptureSchedule();
       this.updateRecordButton();
       this.updateMicDiagnostics('Speech error: ' + event.error);
       this.setStatus('Speech error: ' + event.error);
@@ -1755,6 +1929,43 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  clearUserFlowPromptCaptureSchedule(resolvePending = true) {
+    if (this.userFlowPromptCaptureTimer) {
+      clearTimeout(this.userFlowPromptCaptureTimer);
+      this.userFlowPromptCaptureTimer = null;
+    }
+    if (resolvePending && this.userFlowPromptCaptureResolve) {
+      this.userFlowPromptCaptureResolve();
+    }
+    this.userFlowPromptCaptureResolve = null;
+    this.userFlowPromptCapturePromise = null;
+  }
+
+  scheduleUserFlowPromptCapture() {
+    this.clearUserFlowPromptCaptureSchedule();
+    this.userFlowPromptCapturePromise = new Promise((resolve) => {
+      this.userFlowPromptCaptureResolve = resolve;
+    });
+    this.userFlowPromptCaptureTimer = setTimeout(async () => {
+      this.userFlowPromptCaptureTimer = null;
+      try {
+        await this.captureScreenshot();
+      } finally {
+        const resolve = this.userFlowPromptCaptureResolve;
+        this.userFlowPromptCaptureResolve = null;
+        resolve?.();
+      }
+    }, 1000);
+  }
+
+  async waitForUserFlowPromptCapture() {
+    if (this.userFlowPromptCapturePromise) {
+      await this.userFlowPromptCapturePromise;
+      this.userFlowPromptCapturePromise = null;
+      this.userFlowPromptCaptureResolve = null;
+    }
+  }
+
   togglePromptRecording(purpose = 'prompt') {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
@@ -1766,20 +1977,29 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (this.isRecordingPrompt) {
       recognizer.stop();
       this.isRecordingPrompt = false;
-      this.setStatus(
-        this.recordingPurpose === 'confirmation'
-          ? 'Stopped listening for confirmation.'
-          : 'Stopped listening for prompt.'
-      );
+      this.setStatus('Stopped listening for prompt.');
     } else {
       this.recordingPurpose = purpose;
       this.confirmationTranscript = '';
+      if (purpose === 'prompt') {
+        this.userFlowAwaitingPromptConfirmation = false;
+        this.updateUserFlowUi();
+        if (!this.debugUiEnabled && this.userFlowMode === 'generate') {
+          this.scheduleUserFlowPromptCapture();
+        } else {
+          this.clearUserFlowPromptCaptureSchedule();
+        }
+      } else {
+        this.clearUserFlowPromptCaptureSchedule();
+      }
       this.isRecordingPrompt = true;
       this.updateMicDiagnostics('Speech recognizer start requested.');
       this.setStatus(
         purpose === 'confirmation'
           ? 'Listening for yes or no...'
-          : 'Listening for prompt...'
+          : !this.debugUiEnabled && this.userFlowMode === 'generate'
+            ? 'Listening for prompt... Screenshot will capture in 1 second.'
+            : 'Listening for prompt...'
       );
       recognizer.start();
     }
@@ -1787,14 +2007,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   handleUserFlowRecordAction() {
-    if (this.userFlowMode !== 'generate') {
-      this.togglePromptRecording();
-      return;
-    }
-
-    this.togglePromptRecording(
-      this.userFlowAwaitingPromptConfirmation ? 'confirmation' : 'prompt'
-    );
+    this.togglePromptRecording('prompt');
   }
 
   showUserFlowCapturePreview() {
@@ -1805,6 +2018,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowPreviewPanel.visible = true;
     if (this.userCapturePreviewTimer) {
       clearTimeout(this.userCapturePreviewTimer);
+      this.userCapturePreviewTimer = null;
+    }
+    if (this.userFlowAwaitingPromptConfirmation) {
+      return;
     }
     this.userCapturePreviewTimer = setTimeout(() => {
       this.hideUserFlowCapturePreview();
@@ -1830,10 +2047,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    await this.captureScreenshot();
+    await this.waitForUserFlowPromptCapture();
     this.userFlowAwaitingPromptConfirmation = true;
+    this.showUserFlowCapturePreview();
     this.updateUserFlowUi();
-    this.setStatus('I heard "' + this.currentPrompt + '". Say yes or no, or use Confirm / Cancel.');
+    this.setStatus('I heard "' + this.currentPrompt + '". Review it, then Confirm or Cancel.');
   }
 
   handleUserFlowConfirmationTranscript(transcript = '') {
@@ -1863,6 +2081,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     this.userFlowAwaitingPromptConfirmation = false;
+    this.hideUserFlowCapturePreview();
     this.updateUserFlowUi();
     await this.generateAsset();
   }
@@ -1870,6 +2089,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   cancelUserFlowGeneratePrompt() {
     this.userFlowAwaitingPromptConfirmation = false;
     this.confirmationTranscript = '';
+    this.hideUserFlowCapturePreview();
     this.updateUserFlowUi();
     this.setStatus('Prompt cancelled. Push to talk for a new try.');
   }
@@ -1902,9 +2122,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   shouldEnableTransientModelViewerTransforms() {
-    return ENABLE_TRANSIENT_MODELVIEWER && !this.debugUiEnabled && (
-      this.userFlowMode === 'generate' || this.userFlowMode === 'segment'
-    );
+    return false;
   }
 
   collectTransientTransformDriftAssetIds() {
@@ -3382,8 +3600,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   update() {
+    if (this.devUiSwitchHoldButton && !this.devUiSwitchHoldTriggered) {
+      if (performance.now() - this.devUiSwitchHoldStartMs >= DEV_UI_SWITCH_HOLD_MS) {
+        this.devUiSwitchHoldTriggered = true;
+        this.toggleDeveloperUiShell();
+      }
+    }
+    this.updatePanelDragHandles();
     this.transformGizmoController?.update();
     this.selectionController?.update();
+    this.updateXrUiRayVisibility();
   }
 
   dispose() {
@@ -3391,12 +3617,23 @@ export class Sam3dWorkspaceScene extends xb.Script {
       window.removeEventListener('keydown', this.devUiToggleKeyHandler);
     }
     this.clearDevUiSwitchHold();
+    if (this.panelDragHandles?.size) {
+      for (const entry of this.panelDragHandles.values()) {
+        for (const zone of entry?.zones || []) {
+          zone.geometry?.dispose?.();
+          zone.material?.dispose?.();
+          zone.parent?.remove(zone);
+        }
+      }
+      this.panelDragHandles.clear();
+    }
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
     }
     this.pollGeneration++;
     this.hideUserFlowCapturePreview();
+    this.clearUserFlowPromptCaptureSchedule();
     this.transformGizmoController?.dispose();
     this.transformGizmoController = null;
     this.selectionController?.dispose();

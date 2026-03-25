@@ -326,16 +326,15 @@ export class MeshSelectionController {
     });
   }
 
-  applyModelInteractionPolicy(forceEnable = false) {
+  applyModelInteractionPolicy(_forceEnable = false) {
     if (!this.activeModel) return;
-    const allowModelInteraction = forceEnable || !this.isDrawMode;
-    this.activeModel.draggable = allowModelInteraction;
-    this.activeModel.rotatable = allowModelInteraction;
-    this.activeModel.scalable = allowModelInteraction;
+    this.activeModel.draggable = false;
+    this.activeModel.rotatable = false;
+    this.activeModel.scalable = false;
 
     this.activeModel.traverse((node) => {
       if (node === this.overlay || node.userData?.isSelectionPreview) return;
-      node.ignoreReticleRaycast = !allowModelInteraction;
+      node.ignoreReticleRaycast = true;
     });
   }
 
