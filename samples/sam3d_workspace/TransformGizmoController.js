@@ -328,6 +328,7 @@ export class TransformGizmoController {
         const radial = Math.sqrt(localPoint.x * localPoint.x + localPoint.y * localPoint.y);
         const tubeDistance = Math.sqrt((radial - 1) * (radial - 1) + localPoint.z * localPoint.z);
         if (tubeDistance <= DIRECT_GRAB_TORUS_THRESHOLD) {
+          score = tubeDistance;
           const safeRadial = radial > 1e-5 ? radial : 1;
           hitPointLocal = new THREE.Vector3(localPoint.x / safeRadial, localPoint.y / safeRadial, 0);
         }

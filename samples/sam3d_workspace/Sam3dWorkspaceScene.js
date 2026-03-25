@@ -33,6 +33,7 @@ const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
 const BRUSH_RADIUS_PRESETS = [0.05, 0.08, 0.12];
+const DEFAULT_IMPORTED_ASSET_SCALE = 0.3;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const IDENTITY_MATRIX_ARRAY = new THREE.Matrix4().toArray();
 
@@ -3417,6 +3418,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     } else {
       const placement = this.getDefaultPlacementForIndex(this.workspaceState.assets.length);
       authoredRoot.position.set(placement.x, placement.y, placement.z);
+      authoredRoot.scale.setScalar(DEFAULT_IMPORTED_ASSET_SCALE);
       authoredRoot.updateMatrix();
       authoredRoot.updateMatrixWorld(true);
       assetRecord.transformMatrix = this.getPersistedTransformMatrix(
