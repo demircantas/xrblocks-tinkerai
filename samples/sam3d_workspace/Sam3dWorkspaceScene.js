@@ -1067,12 +1067,22 @@ export class Sam3dWorkspaceScene extends xb.Script {
   setPanelInteractionEnabled(panel, enabled) {
     if (!panel) return;
     panel.traverse((node) => {
-      if (node === panel) {
-        return;
-      }
       node.ignoreReticleRaycast = !enabled;
+      if (typeof node.selectable === 'boolean') {
+        if (!node.userData) {
+          node.userData = {};
+        }
+        if (enabled) {
+          if (Object.prototype.hasOwnProperty.call(node.userData, 'workspaceSelectableBeforeHide')) {
+            node.selectable = node.userData.workspaceSelectableBeforeHide;
+            delete node.userData.workspaceSelectableBeforeHide;
+          }
+        } else if (!Object.prototype.hasOwnProperty.call(node.userData, 'workspaceSelectableBeforeHide')) {
+          node.userData.workspaceSelectableBeforeHide = node.selectable;
+          node.selectable = false;
+        }
+      }
     });
-    panel.ignoreReticleRaycast = !enabled;
   }
 
   setDebugPanelVisibility(visible) {
