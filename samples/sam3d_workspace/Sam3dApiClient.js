@@ -101,6 +101,77 @@ export class Sam3dApiClient {
     };
   }
 
+  async createNanobananaGenerationJob({sessionId, workspaceId = this.workspaceId, prompt, images = []}) {
+    if (this.useBackend) {
+      const response = await fetch(`${this.backendUrl}/baseline/nanobanana/generate`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          sessionId,
+          workspaceId,
+          prompt,
+          images: images.map((image) => parseDataUrl(image)),
+          options: {
+            numImages: 1,
+            aspectRatio: 'auto',
+            outputFormat: 'png',
+            limitGenerations: true,
+          },
+        }),
+      });
+      return await response.json();
+    }
+
+    const jobId = `job-${crypto.randomUUID()}`;
+    const baselineId = `baseline_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const imageUrl = images[0] || '';
+
+    this.jobs.set(jobId, {
+      status: 'queued',
+      progress: 0,
+      result: {
+        jobId,
+        status: 'completed',
+        sessionId,
+        workspaceId,
+        baseline: {
+          baselineId,
+          imageUrl,
+          savedAt: Date.now(),
+          sourceType: 'nanobanana',
+          metadata: {
+            prompt,
+            sessionId,
+            workspaceId,
+            jobId,
+            provider: 'mock',
+            model: 'mock-nanobanana',
+            imageCount: images.length,
+            outputs: imageUrl
+              ? [
+                  {
+                    index: 0,
+                    url: imageUrl,
+                    fileName: 'mock-result.png',
+                    contentType: parseDataUrl(imageUrl).mimeType,
+                  },
+                ]
+              : [],
+          },
+        },
+      },
+    });
+
+    this.runMockJob(jobId);
+
+    return {
+      jobId,
+      status: 'queued',
+      sessionId,
+      workspaceId,
+    };
+  }
+
   async runMockJob(jobId) {
     const job = this.jobs.get(jobId);
     if (!job) return;
