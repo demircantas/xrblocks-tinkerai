@@ -3115,11 +3115,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    if (this.currentJobId) {
-      this.setStatus('Another backend job is already running.');
-      return;
-    }
-
     const restoredAssetIds = this.restorePersistentAssetTransforms();
     await this.saveUserFlowWorkspaceOverwrite({createIfNeeded: true});
     const workspaceId = this.userFlowWorkspaceId;
@@ -3141,6 +3136,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus('Compose job queued for ' + workspaceId + ': ' + job.jobId);
       this.startPollingJob(job.jobId, {
         jobLabel: 'Compose',
+        queueGroup: 'compose',
+        itemLabel: 'Compose',
+        runningVerb: 'composing',
         onCompleted: async (update) => {
           await this.loadGeneratedAsset(update.asset, 'Composed');
           this.userFlowMode = 'compose';
@@ -3422,11 +3420,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    if (this.currentJobId) {
-      this.setStatus('Another backend job is already running.');
-      return;
-    }
-
     const selected = this.workspaceCatalogItems[this.workspaceCatalogIndex];
     if (!selected?.workspaceId) {
       this.setStatus('Selected workspace entry is missing a workspaceId.');
@@ -3445,6 +3438,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus(`Compose job queued for ${workspaceId}: ${job.jobId}`);
       this.startPollingJob(job.jobId, {
         jobLabel: 'Compose',
+        queueGroup: 'compose',
+        itemLabel: 'Compose',
+        runningVerb: 'composing',
         onCompleted: async (update) => {
           await this.loadGeneratedAsset(update.asset, 'Composed');
           this.refreshAssetCatalog().catch((error) => {
