@@ -1241,6 +1241,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const SLOT_MODE_BACK = 6;
     const SLOT_MODE_FORWARD = 7;
     const SLOT_DELETE = 8;
+    const SLOT_RESET = 9;
 
     for (let i = 0; i < this.userFlowButtons.length; i++) {
       this.configureUserFlowButton(i, {visible: false});
@@ -1296,6 +1297,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
         visible: hasAssets,
       });
+      this.configureUserFlowButton(SLOT_RESET, {
+        text: 'Reset',
+        backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
+        onTriggered: () => this.resetActiveAssetToLeftHand(),
+        visible: hasAssets,
+      });
     } else if (this.userFlowMode === 'segment') {
       this.userFlowModeText.text = 'Segment';
       const brushRadius = this.selectionController?.getBrushRadius?.() || 0;
@@ -1348,6 +1355,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
         visible: hasAssets,
       });
+      this.configureUserFlowButton(SLOT_RESET, {
+        text: 'Reset',
+        backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
+        onTriggered: () => this.resetActiveAssetToLeftHand(),
+        visible: hasAssets,
+      });
     } else if (this.userFlowMode === 'compose') {
       this.userFlowModeText.text = 'Compose';
       this.userFlowDetailText.text =
@@ -1380,6 +1393,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
         text: 'Delete Asset',
         backgroundColor: hasAssets ? '#b91c1c' : '#1f2937',
         onTriggered: () => this.deleteActiveAssetFromWorkspace(),
+        visible: hasAssets,
+      });
+      this.configureUserFlowButton(SLOT_RESET, {
+        text: 'Reset',
+        backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
+        onTriggered: () => this.resetActiveAssetToLeftHand(),
         visible: hasAssets,
       });
     }
@@ -1843,6 +1862,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
         model.position.copy(targetWorldPosition);
       }
     }, 'Recalled {assetId} to the ' + hand + ' hand.');
+  }
+
+  resetActiveAssetToLeftHand() {
+    this.handleRockGestureRecall({handIndex: 0, hand: 'left', joints: null});
   }
 
   setStatus(text) {
