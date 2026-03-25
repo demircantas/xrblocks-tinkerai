@@ -6,7 +6,6 @@ import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 import {Sam3dApiClient} from './Sam3dApiClient.js';
 import {MeshSelectionController} from './MeshSelectionController.js';
 import {TransformGizmoController} from './TransformGizmoController.js';
-import {RockGestureRecallController} from './RockGestureRecallController.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
@@ -24,6 +23,8 @@ const BASELINE_UI = getUrlParamString('baselineUi', '') === 'nanobanana';
 const DESKTOP_GEMINI_CAPTURE_URL = '../../assets/desktop_gemini.png';
 const SAMPLE_VERSION = 'workspace-selection-v1';
 const USER_CAPTURE_PREVIEW_MS = 4000;
+const DEVICE_CAMERA_SNAPSHOT_WAIT_MS = 2000;
+const DEVICE_CAMERA_SNAPSHOT_POLL_MS = 100;
 const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
@@ -194,7 +195,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.createSelectionController();
     this.createTransformGizmoController();
     if (ENABLE_ROCK_GESTURE_RECALL) {
-      this.createRockGestureRecallController();
+      this.createRockGestureRecallController().catch((error) => {
+        console.error('Failed to initialize rock gesture recall.', error);
+        this.setStatus('Rock gesture recall is unavailable.');
+      });
     }
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
@@ -1717,7 +1721,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
   }
 
-  createRockGestureRecallController() {
+  async createRockGestureRecallController() {
+    const {RockGestureRecallController} = await import('./RockGestureRecallController.js');
     this.rockGestureRecallController = new RockGestureRecallController({
       onRecall: (payload) => this.handleRockGestureRecall(payload),
       onStatus: (text) => this.setStatus(text),
@@ -2125,23 +2130,43 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Removed the last prompt character.');
   }
 
+  async getDeviceCameraSnapshotWithRetry() {
+    const camera = xb.core.deviceCamera;
+    if (!camera) {
+      return null;
+    }
+
+    const startedAt = performance.now();
+    while (performance.now() - startedAt < DEVICE_CAMERA_SNAPSHOT_WAIT_MS) {
+      if (camera.loaded) {
+        const snapshot = await camera.getSnapshot({outputFormat: 'base64'});
+        if (snapshot) {
+          return snapshot;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, DEVICE_CAMERA_SNAPSHOT_POLL_MS));
+    }
+
+    return null;
+  }
   async captureScreenshot() {
     this.setStatus('Capturing screenshot...');
     try {
       let image = '';
+      let captureSource = 'scene';
       if (USE_DESKTOP_GEMINI_CAPTURE) {
         image = await loadImageAsDataUrl(DESKTOP_GEMINI_CAPTURE_URL);
-      } else if (xb.core.deviceCamera?.loaded) {
-        const snapshot = await xb.core.deviceCamera.getSnapshot({
-          outputFormat: 'base64',
-        });
-        if (!snapshot) {
-          throw new Error('Device camera snapshot returned no data.');
-        }
-        image = snapshot;
+        captureSource = 'desktop';
       } else {
-        const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
-        image = await xb.core.screenshotSynthesizer.getScreenshot(useCameraOverlay);
+        const snapshot = await this.getDeviceCameraSnapshotWithRetry();
+        if (snapshot) {
+          image = snapshot;
+          captureSource = 'device-camera';
+        } else {
+          const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
+          image = await xb.core.screenshotSynthesizer.getScreenshot(useCameraOverlay);
+          captureSource = useCameraOverlay ? 'camera-overlay' : 'scene';
+        }
       }
 
       this.lastScreenshotDataUrl = image;
@@ -2152,11 +2177,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       }
       this.showUserFlowCapturePreview();
       this.setStatus(
-        USE_DESKTOP_GEMINI_CAPTURE
+        captureSource === 'desktop'
           ? 'Loaded test capture from assets/desktop_gemini.png.'
-          : xb.core.deviceCamera?.loaded
+          : captureSource === 'device-camera'
             ? 'Device camera snapshot captured.'
-            : OVERLAY_ON_CAMERA && !!xb.core.deviceCamera
+            : captureSource === 'camera-overlay'
               ? 'Camera-overlay screenshot captured.'
               : 'Scene screenshot captured.'
       );
