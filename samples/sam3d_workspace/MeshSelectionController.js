@@ -786,16 +786,16 @@ export class MeshSelectionController {
     return intersections[0].point.clone();
   }
 
-  getIdlePreviewSource() {
+  getIdlePreviewSources() {
     if (this.idlePreviewSource) {
-      return this.idlePreviewSource;
+      return [this.idlePreviewSource];
     }
     if (xb.core.renderer?.xr?.isPresenting) {
-      return (xb.core?.input?.controllers || []).find(
+      return (xb.core?.input?.controllers || []).filter(
         (controller) => controller?.userData?.id === 0 || controller?.userData?.id === 1
-      ) || null;
+      );
     }
-    return xb.core?.input?.mouseController || null;
+    return xb.core?.input?.mouseController ? [xb.core.input.mouseController] : [];
   }
 
   setBrushVisualIdle(isIdle) {
@@ -812,12 +812,13 @@ export class MeshSelectionController {
 
   updateIdlePreview() {
     if (!this.isDrawMode || this.isPinching || !this.meshes.length) return;
-    const source = this.getIdlePreviewSource();
-    const point = this.resolveWorldPointFromSource(source);
-    if (!point) return;
+    const points = this.getIdlePreviewSources()
+      .map((source) => this.resolveWorldPointFromSource(source))
+      .filter(Boolean);
+    if (!points.length) return;
 
     this.ensureSculptMesh();
-    this.visualStrokePoints = [point];
+    this.visualStrokePoints = points;
     this.strokeWorldPoints = [];
     this.setBrushVisualIdle(true);
     if (USE_DEBUG_SPHERE_BRUSH) {

@@ -1206,7 +1206,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     if (!button) return;
     button.text = text;
     applyTextButtonBackgroundColor(button, backgroundColor);
-    button.onTriggered = onTriggered;
+    button.onTriggered = (controllerId) => onTriggered(controllerId);
     button.visible = visible;
   }
 
@@ -1301,7 +1301,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.configureUserFlowButton(SLOT_RESET, {
         text: 'Reset',
         backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
-        onTriggered: () => this.resetActiveAssetToLeftHand(),
+        onTriggered: (controllerId) => this.resetActiveAssetToHand(controllerId),
         visible: hasAssets,
       });
     } else if (this.userFlowMode === 'segment') {
@@ -1359,7 +1359,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.configureUserFlowButton(SLOT_RESET, {
         text: 'Reset',
         backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
-        onTriggered: () => this.resetActiveAssetToLeftHand(),
+        onTriggered: (controllerId) => this.resetActiveAssetToHand(controllerId),
         visible: hasAssets,
       });
     } else if (this.userFlowMode === 'compose') {
@@ -1399,7 +1399,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.configureUserFlowButton(SLOT_RESET, {
         text: 'Reset',
         backgroundColor: hasAssets ? '#0f766e' : '#1f2937',
-        onTriggered: () => this.resetActiveAssetToLeftHand(),
+        onTriggered: (controllerId) => this.resetActiveAssetToHand(controllerId),
         visible: hasAssets,
       });
     }
@@ -1865,8 +1865,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }, 'Recalled {assetId} to the ' + hand + ' hand.');
   }
 
-  resetActiveAssetToLeftHand() {
-    this.handleRockGestureRecall({handIndex: 0, hand: 'left', joints: null});
+  resetActiveAssetToHand(handIndex = 0) {
+    const safeHandIndex = handIndex === 1 ? 1 : 0;
+    this.handleRockGestureRecall({
+      handIndex: safeHandIndex,
+      hand: safeHandIndex === 1 ? 'right' : 'left',
+      joints: null,
+    });
   }
 
   setStatus(text) {
