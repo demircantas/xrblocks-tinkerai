@@ -27,6 +27,7 @@ const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
 const DEV_UI_SWITCH_HOLD_MS = 1800;
+const UI_BUTTON_SCALE_FACTOR = 1.5;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -1030,6 +1031,37 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateDevUiSwitchButtons();
 
     this.userFlowPanel.updateLayouts();
+
+    this.scaleWorkspaceButtons(UI_BUTTON_SCALE_FACTOR);
+  }
+
+  scaleWorkspaceButtons(factor = 1) {
+    if (!Number.isFinite(factor) || factor <= 0) {
+      return;
+    }
+
+    const panels = [
+      this.mainPanel,
+      this.selectionPanel,
+      this.transformPanel,
+      this.libraryPanel,
+      this.userFlowPanel,
+    ];
+
+    for (const panel of panels) {
+      if (!panel) continue;
+      panel.traverse((node) => {
+        if (node?.constructor?.name !== 'TextButton') {
+          return;
+        }
+        if (!node.userData?.workspaceButtonScaled) {
+          node.width *= factor;
+          node.height *= factor;
+          node.userData.workspaceButtonScaled = true;
+        }
+      });
+      panel.updateLayouts();
+    }
   }
 
   setPanelInteractionEnabled(panel, enabled) {
@@ -1041,7 +1073,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
       node.ignoreReticleRaycast = !enabled;
     });
     panel.ignoreReticleRaycast = !enabled;
-
   }
 
   setDebugPanelVisibility(visible) {
