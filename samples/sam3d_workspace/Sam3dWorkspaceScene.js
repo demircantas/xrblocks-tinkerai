@@ -6,6 +6,7 @@ import {Keyboard} from 'xrblocks/addons/virtualkeyboard/Keyboard.js';
 import {Sam3dApiClient} from './Sam3dApiClient.js';
 import {MeshSelectionController} from './MeshSelectionController.js';
 import {TransformGizmoController} from './TransformGizmoController.js';
+import {RockGestureRecallController} from './RockGestureRecallController.js';
 
 const POLL_INTERVAL_MS = 1000;
 const DEFAULT_PROMPT = 'Generate this coffee mug';
@@ -154,6 +155,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.activeAssetId = null;
     this.selectionController = null;
     this.transformGizmoController = null;
+    this.rockGestureRecallController = null;
     this.isSelectionMode = false;
     this.environmentTarget = null;
     this.environmentTexture = null;
@@ -183,6 +185,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.createPromptKeyboard();
     this.createSelectionController();
     this.createTransformGizmoController();
+    this.createRockGestureRecallController();
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
     this.refreshPromptText();
@@ -1499,6 +1502,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
   }
 
+  createRockGestureRecallController() {
+    this.rockGestureRecallController = new RockGestureRecallController({
+      onRecall: (payload) => this.handleRockGestureRecall(payload),
+      onStatus: (text) => this.setStatus(text),
+    });
+    this.rockGestureRecallController.init();
+  }
+
   bindSpeechRecognizer() {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
@@ -1803,6 +1814,35 @@ export class Sam3dWorkspaceScene extends xb.Script {
       const nextScale = Math.max(0.01, model.scale.x * multiplier);
       model.scale.setScalar(nextScale);
     }, 'Scaled {assetId} by ' + multiplier.toFixed(2) + 'x.');
+  }
+
+  getRockRecallWorldPosition(handIndex, joints) {
+    const wristPosition = joints?.wrist?.position?.clone?.() || null;
+    const pivotPosition = xb.user.getPivotPosition?.(handIndex) || null;
+    const controllerPosition = xb.user.getControllerPosition?.(handIndex, new THREE.Vector3()) || null;
+    const worldPosition = wristPosition || pivotPosition || controllerPosition || new THREE.Vector3();
+
+    const forward = xb.user.getReticleDirection?.(handIndex)?.clone?.() || new THREE.Vector3();
+    if (forward.lengthSq() < 1e-6) {
+      xb.core.camera.getWorldDirection(forward);
+    }
+    forward.normalize();
+    worldPosition.addScaledVector(forward, 0.12);
+    worldPosition.y += 0.04;
+    return worldPosition;
+  }
+
+  handleRockGestureRecall({handIndex, hand, joints}) {
+    const targetWorldPosition = this.getRockRecallWorldPosition(handIndex, joints);
+    this.applyActiveAssetTransform((model) => {
+      if (model.parent) {
+        const localPosition = targetWorldPosition.clone();
+        model.parent.worldToLocal(localPosition);
+        model.position.copy(localPosition);
+      } else {
+        model.position.copy(targetWorldPosition);
+      }
+    }, 'Recalled {assetId} to the ' + hand + ' hand.');
   }
 
   setStatus(text) {
@@ -3600,6 +3640,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       }
     }
     this.transformGizmoController?.update();
+    this.rockGestureRecallController?.update();
     this.selectionController?.update();
     this.updateXrUiRayVisibility();
   }
@@ -3619,6 +3660,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.clearUserFlowPromptCaptureSchedule();
     this.transformGizmoController?.dispose();
     this.transformGizmoController = null;
+    this.rockGestureRecallController?.dispose();
+    this.rockGestureRecallController = null;
     this.selectionController?.dispose();
     this.selectionController = null;
     this.clearAssetInstances();

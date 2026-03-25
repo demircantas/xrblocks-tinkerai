@@ -1,4 +1,4 @@
-import 'xrblocks/addons/simulator/SimulatorAddons.js';
+﻿import 'xrblocks/addons/simulator/SimulatorAddons.js';
 
 import * as xb from 'xrblocks';
 
@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   options.reticles.enabled = true;
   options.xrButton.showEnterSimulatorButton = true;
   options.enableCamera('environment');
+  options.enableHands();
   options.setAppTitle('SAM3D Workspace');
   options.setAppDescription(
     'Workspace refactor for screenshot capture, prompt input, backend generation, and multi-asset placement.'
@@ -21,3 +22,4 @@ document.addEventListener('DOMContentLoaded', async () => {
   xb.add(new Sam3dWorkspaceScene());
   await xb.init(options);
 });
+
