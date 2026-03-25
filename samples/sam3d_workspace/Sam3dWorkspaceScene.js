@@ -31,6 +31,7 @@ const UI_BUTTON_SCALE_FACTOR = 1.5;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
+const BRUSH_RADIUS_PRESETS = [0.05, 0.08, 0.12];
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const IDENTITY_MATRIX_ARRAY = new THREE.Matrix4().toArray();
 
@@ -1294,8 +1295,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
     } else if (this.userFlowMode === 'segment') {
       this.userFlowModeText.text = 'Segment';
+      const brushRadius = this.selectionController?.getBrushRadius?.() || 0;
       this.userFlowDetailText.text =
-        `${activeAssetInfo}\nKept-only view stays on. Use the selection tool to mark what to keep or discard.`;
+        `${activeAssetInfo}\nKept-only view stays on. Use the selection tool to mark what to keep or discard.\nBrush: ${brushRadius.toFixed(2)}m`;
 
       this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
         text: this.isSelectionMode ? 'Select: ON' : 'Select: OFF',
@@ -1316,6 +1318,16 @@ export class Sam3dWorkspaceScene extends xb.Script {
         text: 'Next',
         backgroundColor: hasAssets ? '#334155' : '#1f2937',
         onTriggered: () => this.stepActiveAsset(1),
+      });
+      this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
+        text: 'Brush -',
+        backgroundColor: '#475569',
+        onTriggered: () => this.stepBrushPreset(-1),
+      });
+      this.configureUserFlowButton(SLOT_SECONDARY_RIGHT, {
+        text: 'Brush +',
+        backgroundColor: '#475569',
+        onTriggered: () => this.stepBrushPreset(1),
       });
       this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Generate',
@@ -2607,6 +2619,26 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.transformGizmoController?.setEnabled(
       !!this.activeAssetId && !this.isSelectionMode && this.shouldEnableTransformTools()
     );
+  }
+
+  stepBrushPreset(direction) {
+    if (!this.selectionController?.getBrushRadius || !this.selectionController?.setBrushRadius) {
+      return;
+    }
+    const currentRadius = this.selectionController.getBrushRadius();
+    let closestIndex = 0;
+    let closestDistance = Infinity;
+    for (let i = 0; i < BRUSH_RADIUS_PRESETS.length; i += 1) {
+      const distance = Math.abs(BRUSH_RADIUS_PRESETS[i] - currentRadius);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = i;
+      }
+    }
+    const nextIndex = THREE.MathUtils.clamp(closestIndex + direction, 0, BRUSH_RADIUS_PRESETS.length - 1);
+    const nextRadius = this.selectionController.setBrushRadius(BRUSH_RADIUS_PRESETS[nextIndex]);
+    this.updateUserFlowUi();
+    this.setStatus(`Brush size set to ${nextRadius.toFixed(2)}m.`);
   }
 
   togglePaintMode() {

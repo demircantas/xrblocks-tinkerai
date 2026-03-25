@@ -7,6 +7,10 @@ const DEFAULT_SELECTION_BRUSH_RADIUS = 0.08;
 const DEFAULT_VISUAL_BRUSH_RADIUS = 0.08;
 const DEFAULT_STAMP_INTERVAL_MS = 70;
 const DEFAULT_SAMPLE_STEP_DISTANCE = 0.015;
+const MIN_BRUSH_RADIUS = 0.02;
+const MAX_BRUSH_RADIUS = 0.3;
+const IDLE_BRUSH_OPACITY = 0.16;
+const ACTIVE_BRUSH_OPACITY = 0.45;
 const STATUS_INTERVAL_MS = 120;
 const SCULPT_RESOLUTION = 28;
 const SCULPT_SUBTRACT = 12;
@@ -231,6 +235,25 @@ export class MeshSelectionController {
   setPaintMode(mode) {
     this.paintMode = mode === 'keep' ? 'keep' : 'discard';
     this.updateSculptMaterial();
+  }
+
+  getBrushRadius() {
+    return this.selectionBrushRadius;
+  }
+
+  setBrushRadius(radius) {
+    const nextRadius = THREE.MathUtils.clamp(radius, MIN_BRUSH_RADIUS, MAX_BRUSH_RADIUS);
+    this.selectionBrushRadius = nextRadius;
+    this.visualBrushRadius = nextRadius;
+    if (this.activeModel) {
+      this.updateSculptBounds();
+    }
+    if (this.sculptMesh && USE_DEBUG_SPHERE_BRUSH) {
+      this.refreshDebugSphereInstances();
+    } else if (this.sculptMesh) {
+      this.rebuildSculptMesh();
+    }
+    return nextRadius;
   }
 
   clearSelection() {
@@ -484,7 +507,7 @@ export class MeshSelectionController {
       this.sculptSphereMaterial = new THREE.MeshBasicMaterial({
         color: this.paintMode === 'keep' ? 0x22c55e : 0xef4444,
         transparent: true,
-        opacity: 0.45,
+        opacity: ACTIVE_BRUSH_OPACITY,
         depthWrite: false,
       });
     }
@@ -746,29 +769,77 @@ export class MeshSelectionController {
     return changed > 0;
   }
 
+  resolveWorldPointFromSource(source) {
+    if (!source || !this.meshes.length) return null;
+    if (xb.core.renderer?.xr?.isPresenting) {
+      return source.getWorldPosition(this._tmpWorldPoint).clone();
+    }
+
+    this._tmpRotation.identity().extractRotation(source.matrixWorld);
+    this._tmpRayDirection.set(0, 0, -1).applyMatrix4(this._tmpRotation).normalize();
+    source.getWorldPosition(this._tmpRayOrigin);
+    this.raycaster.ray.origin.copy(this._tmpRayOrigin);
+    this.raycaster.ray.direction.copy(this._tmpRayDirection);
+
+    const intersections = this.raycaster.intersectObjects(this.meshes, false);
+    if (!intersections.length) return null;
+    return intersections[0].point.clone();
+  }
+
+  getIdlePreviewSource() {
+    if (this.idlePreviewSource) {
+      return this.idlePreviewSource;
+    }
+    if (xb.core.renderer?.xr?.isPresenting) {
+      return (xb.core?.input?.controllers || []).find(
+        (controller) => controller?.userData?.id === 0 || controller?.userData?.id === 1
+      ) || null;
+    }
+    return xb.core?.input?.mouseController || null;
+  }
+
+  setBrushVisualIdle(isIdle) {
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      if (this.sculptSphereMaterial) {
+        this.sculptSphereMaterial.opacity = isIdle ? IDLE_BRUSH_OPACITY : ACTIVE_BRUSH_OPACITY;
+      }
+      return;
+    }
+    if (this.sculptMesh?.material) {
+      this.sculptMesh.material.opacity = isIdle ? 0.22 : 0.58;
+    }
+  }
+
+  updateIdlePreview() {
+    if (!this.isDrawMode || this.isPinching || !this.meshes.length) return;
+    const source = this.getIdlePreviewSource();
+    const point = this.resolveWorldPointFromSource(source);
+    if (!point) return;
+
+    this.ensureSculptMesh();
+    this.visualStrokePoints = [point];
+    this.strokeWorldPoints = [];
+    this.setBrushVisualIdle(true);
+    if (USE_DEBUG_SPHERE_BRUSH) {
+      this.refreshDebugSphereInstances();
+    } else {
+      this.rebuildSculptMesh();
+    }
+  }
+
   sampleDrawFromSource(source, force = false) {
     if (!source || !this.isDrawMode || !this.meshes.length) return;
     const now = performance.now();
     if (!force && now - this.lastStampTimeMs < this.stampIntervalMs) return;
-    if (xb.core.renderer?.xr?.isPresenting) {
-      source.getWorldPosition(this._tmpWorldPoint);
-    } else {
-      this._tmpRotation.identity().extractRotation(source.matrixWorld);
-      this._tmpRayDirection.set(0, 0, -1).applyMatrix4(this._tmpRotation).normalize();
-      source.getWorldPosition(this._tmpRayOrigin);
-      this.raycaster.ray.origin.copy(this._tmpRayOrigin);
-      this.raycaster.ray.direction.copy(this._tmpRayDirection);
+    const worldPoint = this.resolveWorldPointFromSource(source);
+    if (!worldPoint) return;
 
-      const intersections = this.raycaster.intersectObjects(this.meshes, false);
-      if (!intersections.length) return;
-      this._tmpWorldPoint.copy(intersections[0].point);
-    }
-
-    this.appendStrokePoint(this._tmpWorldPoint);
+    this.setBrushVisualIdle(false);
+    this.appendStrokePoint(worldPoint);
 
     if (now - this.lastStatusTimeMs >= STATUS_INTERVAL_MS) {
       this.onStatus(
-        `${this.paintMode === 'keep' ? 'Keeping' : 'Discarding'} with sculpt brush on ${this.activeAssetId || 'asset'}.`
+        `Discarding with sculpt brush on asset.`
       );
       this.lastStatusTimeMs = now;
     }
@@ -816,8 +887,12 @@ export class MeshSelectionController {
   }
 
   update() {
-    if (!this.isDrawMode || !this.isPinching || !this.activePinchSource) return;
-    this.sampleDrawFromSource(this.activePinchSource);
+    if (!this.isDrawMode) return;
+    if (this.isPinching && this.activePinchSource) {
+      this.sampleDrawFromSource(this.activePinchSource);
+      return;
+    }
+    this.updateIdlePreview();
   }
 }
 
