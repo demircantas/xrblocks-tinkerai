@@ -192,6 +192,18 @@ export class Sam3dApiClient {
     completedJob.status = 'completed';
   }
 
+  async listJobs() {
+    if (this.useBackend) {
+      const response = await fetch(`${this.backendUrl}/jobs`);
+      return await response.json();
+    }
+
+    const items = [...this.jobs.entries()]
+      .map(([jobId, job]) => ({jobId, status: job.status}))
+      .reverse();
+
+    return {items, count: items.length};
+  }
   async getJob(jobId) {
     if (this.useBackend) {
       const response = await fetch(`${this.backendUrl}/jobs/${jobId}`);

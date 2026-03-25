@@ -28,6 +28,7 @@ const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
+const ENABLE_ROCK_GESTURE_RECALL = xb.getUrlParamBool('enableRockGestureRecall', false);
 const DEV_UI_SWITCH_HOLD_MS = 1800;
 const UI_BUTTON_SCALE_FACTOR = 1.5;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
@@ -147,7 +148,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
     this.pollHandle = null;
-    this.pollGeneration = 0;
+    this.activeJobs = new Map();
+    this.jobGroupState = new Map();
     this.isRecordingPrompt = false;
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
@@ -191,7 +193,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.createPromptKeyboard();
     this.createSelectionController();
     this.createTransformGizmoController();
-    this.createRockGestureRecallController();
+    if (ENABLE_ROCK_GESTURE_RECALL) {
+      this.createRockGestureRecallController();
+    }
     this.bindSpeechRecognizer();
     this.updateMicDiagnostics();
     this.refreshPromptText();
@@ -1252,22 +1256,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    if (this.currentJobId) {
-      this.setStatus('Another backend job is already running.');
-      return;
-    }
-
     const job = await this.apiClient.createNanobananaGenerationJob({
       sessionId: this.sessionId,
       workspaceId: this.userFlowWorkspaceId || this.apiClient.workspaceId,
       prompt: this.currentPrompt,
       images: [this.lastScreenshotDataUrl],
     });
-
-    this.currentJobId = job.jobId;
     this.setStatus('Nano Banana job queued: ' + job.jobId);
     this.startPollingJob(job.jobId, {
       jobLabel: 'Nano Banana',
+      queueGroup: 'nanobanana',
+      itemLabel: 'Image',
+      runningVerb: 'generating',
       onCompleted: async (update) => {
         const baseline = update?.baseline;
         if (!baseline?.imageUrl) {
@@ -3138,8 +3138,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
           normalizeToDecoderGrid: false,
         },
       });
-
-      this.currentJobId = job.jobId;
       this.setStatus('Compose job queued for ' + workspaceId + ': ' + job.jobId);
       this.startPollingJob(job.jobId, {
         jobLabel: 'Compose',
@@ -3444,8 +3442,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
           normalizeToDecoderGrid: false,
         },
       });
-
-      this.currentJobId = job.jobId;
       this.setStatus(`Compose job queued for ${workspaceId}: ${job.jobId}`);
       this.startPollingJob(job.jobId, {
         jobLabel: 'Compose',
@@ -3515,21 +3511,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
-    if (this.currentJobId) {
-      this.setStatus('Another backend job is already running.');
-      return;
-    }
-
     const job = await this.apiClient.createGenerationJob({
       sessionId: this.sessionId,
       prompt: this.currentPrompt,
       image: this.lastScreenshotDataUrl,
     });
-
-    this.currentJobId = job.jobId;
     this.setStatus(`Generation job queued: ${job.jobId}`);
     this.startPollingJob(job.jobId, {
       jobLabel: 'Generation',
+      queueGroup: 'generation',
+      itemLabel: 'Object',
+      runningVerb: 'generating',
       onCompleted: async (update) => {
         await this.loadGeneratedAsset(update.asset, 'Generated');
       },
@@ -3537,62 +3529,194 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
   }
 
-  startPollingJob(jobId, {jobLabel = 'Job', onCompleted, failedMessage = 'Job failed.'} = {}) {
-    if (this.pollHandle) {
-      clearTimeout(this.pollHandle);
-      this.pollHandle = null;
+  getJobGroupState(groupKey) {
+    if (!groupKey) {
+      return null;
     }
 
-    const pollGeneration = ++this.pollGeneration;
-
-    const pollOnce = async () => {
-      if (pollGeneration !== this.pollGeneration) {
-        return;
-      }
-
-      try {
-        const update = await this.apiClient.getJob(jobId);
-        if (pollGeneration !== this.pollGeneration) {
-          return;
-        }
-
-        if (update.status === 'running' || update.status === 'queued') {
-          const progress = update.progress
-            ? `${Math.round(update.progress * 100)}%`
-            : 'starting';
-          this.setStatus(
-            `${jobLabel} ${update.status}: ${progress}${
-              update.message ? ` - ${update.message}` : ''
-            }`
-          );
-          this.pollHandle = setTimeout(pollOnce, POLL_INTERVAL_MS);
-          return;
-        }
-
-        this.pollHandle = null;
-        this.currentJobId = null;
-
-        if (update.status === 'failed') {
-          this.setStatus(update.error || failedMessage);
-          return;
-        }
-
-        this.pollGeneration++;
-        await onCompleted?.(update);
-      } catch (error) {
-        if (pollGeneration !== this.pollGeneration) {
-          return;
-        }
-        this.pollHandle = null;
-        this.currentJobId = null;
-        console.error(`${jobLabel} polling failed.`, error);
-        this.setStatus(`${jobLabel} polling failed.`);
-      }
-    };
-
-    this.pollHandle = setTimeout(pollOnce, POLL_INTERVAL_MS);
+    let state = this.jobGroupState.get(groupKey);
+    if (!state) {
+      state = {totalQueued: 0, completedCount: 0};
+      this.jobGroupState.set(groupKey, state);
+    }
+    return state;
   }
 
+  resetJobGroupStateIfIdle(groupKey) {
+    if (!groupKey) {
+      return;
+    }
+
+    for (const job of this.activeJobs.values()) {
+      if (job.queueGroup === groupKey) {
+        return;
+      }
+    }
+
+    this.jobGroupState.delete(groupKey);
+  }
+
+  syncCurrentJobId() {
+    const nextJob = [...this.activeJobs.values()]
+      .sort((a, b) => a.submittedAt - b.submittedAt)[0];
+    this.currentJobId = nextJob?.jobId || null;
+  }
+
+  formatTrackedJobStatus(trackedJob, update) {
+    const groupState = trackedJob.queueGroup
+      ? this.jobGroupState.get(trackedJob.queueGroup)
+      : null;
+    const totalQueued = groupState?.totalQueued || 0;
+    const baseLabel = trackedJob.sequenceNumber != null && totalQueued > 1
+      ? `${trackedJob.itemLabel || trackedJob.jobLabel} ${trackedJob.sequenceNumber}/${totalQueued}`
+      : trackedJob.jobLabel;
+
+    let statusText = '';
+    if (update.status === 'queued') {
+      const queueDetails = [];
+      if (Number.isFinite(update.queuePosition)) {
+        queueDetails.push(`position ${update.queuePosition}`);
+      }
+      if (Number.isFinite(update.queueAhead)) {
+        queueDetails.push(`${update.queueAhead} ahead`);
+      }
+      statusText = queueDetails.length
+        ? `${baseLabel} queued: ${queueDetails.join(', ')}`
+        : `${baseLabel} queued`;
+    } else {
+      const progress = update.progress != null
+        ? `${Math.round(update.progress * 100)}%`
+        : 'starting';
+      statusText = `${baseLabel} ${trackedJob.runningVerb || 'running'}: ${progress}`;
+    }
+
+    const extras = [];
+    if (update.message) {
+      extras.push(update.message);
+    }
+    if (update.status === 'queued' && update.runningJobId) {
+      extras.push(`waiting for ${update.runningJobId}`);
+    }
+    if (extras.length) {
+      statusText += ` - ${extras.join(' | ')}`;
+    }
+
+    return statusText;
+  }
+
+  scheduleJobPoll() {
+    if (this.pollHandle || !this.activeJobs.size) {
+      return;
+    }
+
+    this.pollHandle = setTimeout(async () => {
+      this.pollHandle = null;
+      await this.pollTrackedJobs();
+    }, POLL_INTERVAL_MS);
+  }
+
+  async pollTrackedJobs() {
+    const trackedJobs = [...this.activeJobs.values()]
+      .sort((a, b) => a.submittedAt - b.submittedAt);
+
+    if (!trackedJobs.length) {
+      this.currentJobId = null;
+      return;
+    }
+
+    let jobSummariesById = new Map();
+    try {
+      const jobsPayload = await this.apiClient.listJobs();
+      const jobItems = Array.isArray(jobsPayload?.items) ? jobsPayload.items : [];
+      jobSummariesById = new Map(jobItems.map((job) => [job.jobId, job]));
+    } catch (error) {
+      console.warn('Jobs list reconciliation failed.', error);
+    }
+
+    let primaryStatus = null;
+
+    for (const trackedJob of trackedJobs) {
+      const jobSummary = jobSummariesById.get(trackedJob.jobId);
+      let update;
+      try {
+        update = await this.apiClient.getJob(trackedJob.jobId);
+      } catch (error) {
+        console.error(`${trackedJob.jobLabel} polling failed.`, error);
+        if (jobSummary?.status === 'queued' || jobSummary?.status === 'running') {
+          if (!primaryStatus) {
+            primaryStatus = {trackedJob, update: jobSummary};
+          }
+          continue;
+        }
+        if (jobSummary?.status === 'completed' || jobSummary?.status === 'failed') {
+          continue;
+        }
+        this.activeJobs.delete(trackedJob.jobId);
+        this.resetJobGroupStateIfIdle(trackedJob.queueGroup);
+        this.setStatus(`${trackedJob.jobLabel} polling failed.`);
+        continue;
+      }
+
+      if (update.status === 'queued' || update.status === 'running') {
+        if (!primaryStatus) {
+          primaryStatus = {trackedJob, update};
+        }
+        continue;
+      }
+
+      this.activeJobs.delete(trackedJob.jobId);
+
+      if (trackedJob.queueGroup) {
+        const groupState = this.jobGroupState.get(trackedJob.queueGroup);
+        if (groupState) {
+          groupState.completedCount += 1;
+        }
+      }
+
+      if (update.status === 'failed') {
+        this.setStatus(update.error || trackedJob.failedMessage);
+        this.resetJobGroupStateIfIdle(trackedJob.queueGroup);
+        continue;
+      }
+
+      await trackedJob.onCompleted?.(update);
+      this.resetJobGroupStateIfIdle(trackedJob.queueGroup);
+    }
+
+    this.syncCurrentJobId();
+
+    if (primaryStatus && this.activeJobs.has(primaryStatus.trackedJob.jobId)) {
+      this.setStatus(this.formatTrackedJobStatus(primaryStatus.trackedJob, primaryStatus.update));
+    }
+
+    this.scheduleJobPoll();
+  }
+
+  startPollingJob(jobId, {jobLabel = 'Job', onCompleted, failedMessage = 'Job failed.', queueGroup = null, itemLabel = '', runningVerb = 'running'} = {}) {
+    let sequenceNumber = null;
+    if (queueGroup) {
+      const groupState = this.getJobGroupState(queueGroup);
+      groupState.totalQueued += 1;
+      sequenceNumber = groupState.totalQueued;
+    }
+
+    const trackedJob = {
+      jobId,
+      jobLabel,
+      onCompleted,
+      failedMessage,
+      queueGroup,
+      itemLabel,
+      runningVerb,
+      sequenceNumber,
+      submittedAt: Date.now(),
+    };
+
+    this.activeJobs.set(jobId, trackedJob);
+    this.syncCurrentJobId();
+    this.setStatus(this.formatTrackedJobStatus(trackedJob, {status: 'queued'}));
+    this.scheduleJobPoll();
+  }
   async instantiateAssetRecord(assetRecord, {setActive = true} = {}) {
     this.setStatus(`Loading asset ${assetRecord.assetId}...`);
 
@@ -3669,7 +3793,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     return authoredRoot;
   }
-
   async loadGeneratedAsset(asset, sourceLabel = 'Generated') {
     const existingRecord = this.getAssetRecord(asset.assetId);
     const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
@@ -3823,7 +3946,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.pollHandle = null;
     }
     this.currentJobId = null;
-    this.pollGeneration++;
+    this.activeJobs.clear();
+    this.jobGroupState.clear();
     this.clearAssetInstances();
     this.activeAssetId = null;
     this.isSelectionMode = false;
@@ -3894,7 +4018,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
     }
-    this.pollGeneration++;
+    this.activeJobs.clear();
+    this.jobGroupState.clear();
     this.hideUserFlowCapturePreview();
     this.clearUserFlowPromptCaptureSchedule();
     this.transformGizmoController?.dispose();

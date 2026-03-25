@@ -25,6 +25,12 @@ The backend now exposes:
 
 The frontend should use the same polling pattern it already uses for backend jobs.
 
+Important current behavior:
+
+- Nano Banana requests are processed one at a time on the backend.
+- If a new request arrives while another is running, the new job stays in `queued` status.
+- Queued jobs include queue metadata so the frontend can show position and waiting state.
+
 ## Generate Request
 
 ### Route
@@ -117,7 +123,12 @@ Example:
   "jobId": "job-abc123",
   "status": "queued",
   "sessionId": "session-123",
-  "workspaceId": "workspace-local"
+  "workspaceId": "workspace-local",
+  "progress": 0.0,
+  "message": "Queued for Nano Banana baseline generation",
+  "queuePosition": 1,
+  "queueAhead": 0,
+  "runningJobId": "job-currently-running"
 }
 ```
 
@@ -137,6 +148,18 @@ While running, the backend will return statuses like:
 - `running`
 - `completed`
 - `failed`
+
+When `status === "queued"`, the job payload may also include:
+
+- `queuePosition`: 1-based position among waiting jobs
+- `queueAhead`: number of queued jobs ahead of this one
+- `runningJobId`: the currently active Nano Banana job, if any
+
+Recommended UI interpretation:
+
+- `queuePosition = 1` means this is the next job that will start after the currently running request finishes
+- `queueAhead = 0` means nothing else is waiting ahead of this request
+- while queued, the frontend should continue polling normally
 
 ### Completed job example
 
@@ -215,6 +238,12 @@ The intended first implementation is:
 6. On completion, frontend displays `baseline.imageUrl`.
 7. On failure, frontend surfaces `error ?? message`.
 
+If the job is still queued, the frontend should display:
+
+- a queued state
+- `queuePosition`
+- optionally `queueAhead`
+
 ## Minimal Fetch Example
 
 ```ts
@@ -276,6 +305,14 @@ async function pollBaselineJob(baseUrl: string, jobId: string) {
       throw new Error(job.error || job.message || "Baseline generation failed");
     }
 
+    if (job.status === "queued") {
+      console.log("Queued", {
+        queuePosition: job.queuePosition,
+        queueAhead: job.queueAhead,
+        runningJobId: job.runningJobId,
+      });
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 }
@@ -289,6 +326,7 @@ For the first button implementation, the frontend should keep the UI simple:
 - one action button for baseline generation
 - one screenshot list or multi-select capture source
 - loading state while the job is queued/running
+- queued label with queue position while `status === "queued"`
 - image preview once `baseline.imageUrl` is available
 - error text if the job fails
 
