@@ -27,9 +27,6 @@ const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
 const DEV_UI_SWITCH_HOLD_MS = 1800;
-const PANEL_DRAG_ZONE_THICKNESS = 0.12;
-const PANEL_DRAG_ZONE_CORNER_SIZE = 0.18;
-const PANEL_DRAG_ZONE_DEPTH = 0.002;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
 const TRANSFORM_ROTATE_STEP = THREE.MathUtils.degToRad(15);
 const TRANSFORM_SCALE_MULTIPLIER = 1.1;
@@ -137,7 +134,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowPromptCaptureTimer = null;
     this.userFlowPromptCapturePromise = null;
     this.userFlowPromptCaptureResolve = null;
-    this.panelDragHandles = new Map();
     this.currentPrompt = getUrlParamString('prompt', DEFAULT_PROMPT);
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
@@ -230,7 +226,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       width: 0.62,
       height: 0.92,
       backgroundColor: '#1f2937EE',
-      draggable: false,
+      draggable: true,
       useBorderlessShader: false,
       useDefaultPosition: false,
     });
@@ -444,13 +440,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.configureDevUiSwitchButton(this.mainVersionButton);
 
     this.mainPanel.updateLayouts();
-    this.attachPanelDragHandles(this.mainPanel);
 
     this.selectionPanel = new xb.SpatialPanel({
       width: 0.48,
       height: 0.54,
       backgroundColor: '#111827EE',
-      draggable: false,
+      draggable: true,
       useBorderlessShader: false,
       useDefaultPosition: false,
     });
@@ -535,13 +530,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.selectionPanel.updateLayouts();
-    this.attachPanelDragHandles(this.selectionPanel);
 
     this.transformPanel = new xb.SpatialPanel({
       width: 0.44,
       height: 0.62,
       backgroundColor: '#0f172aEE',
-      draggable: false,
+      draggable: true,
       useBorderlessShader: false,
       useDefaultPosition: false,
     });
@@ -718,13 +712,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.transformPanel.updateLayouts();
-    this.attachPanelDragHandles(this.transformPanel);
 
     this.libraryPanel = new xb.SpatialPanel({
       width: 0.48,
       height: 0.98,
       backgroundColor: '#172554EE',
-      draggable: false,
+      draggable: true,
       useBorderlessShader: false,
       useDefaultPosition: false,
     });
@@ -931,13 +924,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
     this.workspaceComposeButton.onTriggered = () => this.composeSelectedWorkspaceCatalogItem();
     this.libraryPanel.updateLayouts();
-    this.attachPanelDragHandles(this.libraryPanel);
 
     this.userFlowPanel = new xb.SpatialPanel({
       width: 0.54,
       height: 0.94,
       backgroundColor: '#111827EE',
-      draggable: false,
+      draggable: true,
       useBorderlessShader: false,
       useDefaultPosition: false,
     });
@@ -1038,81 +1030,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateDevUiSwitchButtons();
 
     this.userFlowPanel.updateLayouts();
-    this.attachPanelDragHandles(this.userFlowPanel);
-  }
-
-  attachPanelDragHandles(panel) {
-    if (!panel || this.panelDragHandles.has(panel)) {
-      return;
-    }
-
-    panel.draggable = true;
-    panel.draggingMode = xb.DragMode.TRANSLATING;
-
-    const zones = [];
-    const transparentMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.001,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-
-    const createZone = (name, width, height, x, y) => {
-      const zone = new THREE.Mesh(
-        new THREE.PlaneGeometry(width, height),
-        transparentMaterial.clone()
-      );
-      zone.name = 'PanelDragZone:' + name;
-      zone.position.set(x, y, PANEL_DRAG_ZONE_DEPTH);
-      zone.draggingMode = xb.DragMode.TRANSLATING;
-      zone.ignoreReticleRaycast = false;
-      zone.userData.isPanelDragZone = true;
-      panel.add(zone);
-      zones.push(zone);
-    };
-
-    const halfX = panel.rangeX * 0.5;
-    const halfY = panel.rangeY * 0.5;
-    const edgeThickness = PANEL_DRAG_ZONE_THICKNESS;
-    const cornerSize = PANEL_DRAG_ZONE_CORNER_SIZE;
-
-    createZone('topEdge', Math.max(panel.rangeX - cornerSize * 2, edgeThickness), edgeThickness, 0, halfY - edgeThickness * 0.5);
-    createZone('bottomEdge', Math.max(panel.rangeX - cornerSize * 2, edgeThickness), edgeThickness, 0, -halfY + edgeThickness * 0.5);
-    createZone('leftEdge', edgeThickness, Math.max(panel.rangeY - cornerSize * 2, edgeThickness), -halfX + edgeThickness * 0.5, 0);
-    createZone('rightEdge', edgeThickness, Math.max(panel.rangeY - cornerSize * 2, edgeThickness), halfX - edgeThickness * 0.5, 0);
-
-    createZone('topLeft', cornerSize, cornerSize, -halfX + cornerSize * 0.5, halfY - cornerSize * 0.5);
-    createZone('topRight', cornerSize, cornerSize, halfX - cornerSize * 0.5, halfY - cornerSize * 0.5);
-    createZone('bottomLeft', cornerSize, cornerSize, -halfX + cornerSize * 0.5, -halfY + cornerSize * 0.5);
-    createZone('bottomRight', cornerSize, cornerSize, halfX - cornerSize * 0.5, -halfY + cornerSize * 0.5);
-
-    panel.traverse((child) => {
-      if (child === panel || child.userData?.isPanelDragZone) {
-        return;
-      }
-      child.draggingMode = xb.DragMode.DO_NOT_DRAG;
-    });
-
-    this.panelDragHandles.set(panel, {
-      zones,
-      lockedScale: panel.scale.clone(),
-    });
-  }
-
-  updatePanelDragHandles() {
-    if (!this.panelDragHandles?.size) {
-      return;
-    }
-
-    for (const [panel, entry] of this.panelDragHandles.entries()) {
-      if (!panel?.parent) {
-        continue;
-      }
-      if (entry?.lockedScale) {
-        panel.scale.copy(entry.lockedScale);
-      }
-    }
   }
 
   setPanelInteractionEnabled(panel, enabled) {
@@ -1124,6 +1041,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       node.ignoreReticleRaycast = !enabled;
     });
     panel.ignoreReticleRaycast = !enabled;
+
   }
 
   setDebugPanelVisibility(visible) {
@@ -3606,7 +3524,6 @@ export class Sam3dWorkspaceScene extends xb.Script {
         this.toggleDeveloperUiShell();
       }
     }
-    this.updatePanelDragHandles();
     this.transformGizmoController?.update();
     this.selectionController?.update();
     this.updateXrUiRayVisibility();
@@ -3617,16 +3534,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       window.removeEventListener('keydown', this.devUiToggleKeyHandler);
     }
     this.clearDevUiSwitchHold();
-    if (this.panelDragHandles?.size) {
-      for (const entry of this.panelDragHandles.values()) {
-        for (const zone of entry?.zones || []) {
-          zone.geometry?.dispose?.();
-          zone.material?.dispose?.();
-          zone.parent?.remove(zone);
-        }
-      }
-      this.panelDragHandles.clear();
-    }
+
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
