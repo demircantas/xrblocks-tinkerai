@@ -9,7 +9,8 @@ const MIN_GIZMO_RADIUS = 0.09;
 const MAX_GIZMO_RADIUS = 0.42;
 const MOVE_HANDLE_RADIUS = 0.11;
 const SCALE_HANDLE_SIZE = 0.18;
-const HANDLE_OPACITY = 0.94;
+const HANDLE_OPACITY = 0.5;
+const HOVER_OPACITY = 1.0;
 const ACTIVE_OPACITY = 1.0;
 const MIN_SCALE = 0.01;
 const MAX_SCALE = 50;
@@ -146,6 +147,8 @@ export class TransformGizmoController {
     if (this.activeInteraction) {
       this.updateInteraction(this.activeInteraction, this.activeInteraction.controller);
     }
+
+    this.updateHandleVisualState();
   }
 
   buildHandles() {
@@ -510,6 +513,7 @@ export class TransformGizmoController {
     this.onTransformChanged(this.target);
     this.updateTargetWorldPose();
     this.updateGizmoPose();
+    this.updateHandleVisualState();
   }
 
   stopInteraction() {
@@ -517,6 +521,52 @@ export class TransformGizmoController {
       this.setHandleActive(this.activeInteraction.handle, false);
     }
     this.activeInteraction = null;
+  }
+
+  updateHandleVisualState() {
+    const controllerPositions = [];
+    if (xb.core.renderer?.xr?.isPresenting) {
+      for (const controller of xb.core.input?.controllers || []) {
+        controller.updateMatrixWorld?.(true);
+        controllerPositions.push(controller.getWorldPosition(new THREE.Vector3()));
+      }
+    }
+
+    for (const mesh of this.handles) {
+      const meshHandle = mesh.userData?.transformHandle;
+      if (!meshHandle) continue;
+      const isActive = this.activeInteraction?.handle?.name === meshHandle.name;
+      const isNear = !isActive && controllerPositions.some((position) => this.getHandleProximityScore(mesh, position) < Infinity);
+      mesh.material.opacity = isActive ? ACTIVE_OPACITY : isNear ? HOVER_OPACITY : HANDLE_OPACITY;
+      mesh.scale.setScalar(isActive ? 1.1 : isNear ? 1.04 : 1.0);
+    }
+  }
+
+  getHandleProximityScore(mesh, controllerWorld) {
+    const handle = mesh.userData?.transformHandle;
+    if (!handle) return Infinity;
+    const localPoint = mesh.worldToLocal(controllerWorld.clone());
+
+    if (handle.type === 'rotate') {
+      const radial = Math.sqrt(localPoint.x * localPoint.x + localPoint.y * localPoint.y);
+      const tubeDistance = Math.sqrt((radial - 1) * (radial - 1) + localPoint.z * localPoint.z);
+      return tubeDistance <= DIRECT_GRAB_TORUS_THRESHOLD ? tubeDistance : Infinity;
+    }
+
+    if (handle.type === 'move') {
+      const score = localPoint.length();
+      return score <= DIRECT_GRAB_SPHERE_THRESHOLD ? score : Infinity;
+    }
+
+    if (handle.type === 'scale') {
+      const dx = Math.max(Math.abs(localPoint.x) - SCALE_HANDLE_SIZE * 0.5, 0);
+      const dy = Math.max(Math.abs(localPoint.y) - SCALE_HANDLE_SIZE * 0.5, 0);
+      const dz = Math.max(Math.abs(localPoint.z) - SCALE_HANDLE_SIZE * 0.5, 0);
+      const score = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      return score <= DIRECT_GRAB_BOX_THRESHOLD ? score : Infinity;
+    }
+
+    return Infinity;
   }
 
   setHandleActive(handle, isActive) {
