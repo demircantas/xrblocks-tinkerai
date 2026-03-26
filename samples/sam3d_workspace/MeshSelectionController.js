@@ -20,6 +20,9 @@ const DEBUG_SPHERE_INITIAL_CAPACITY = 64;
 const DEBUG_SPHERE_WIDTH_SEGMENTS = 8;
 const DEBUG_SPHERE_HEIGHT_SEGMENTS = 6;
 
+const MAX_IDLE_PREVIEW_SPHERES = 2;
+const IDLE_PREVIEW_POSITION_EPSILON = 0.001;
+
 const IDENTITY_QUATERNION = new THREE.Quaternion();
 const NO_RAYCAST = () => {};
 
@@ -253,6 +256,7 @@ export class MeshSelectionController {
     } else if (this.sculptMesh) {
       this.rebuildSculptMesh();
     }
+    this.updateIdlePreviewSphereScale();
     return nextRadius;
   }
 
@@ -810,21 +814,113 @@ export class MeshSelectionController {
     }
   }
 
+  ensureIdlePreviewResources() {
+    this.idlePreviewMeshes ||= [];
+    this.idlePreviewLastPositions ||= [];
+    if (!this.idlePreviewGroup) {
+      this.idlePreviewGroup = new THREE.Group();
+      this.idlePreviewGroup.ignoreReticleRaycast = true;
+      this.overlay.add(this.idlePreviewGroup);
+    }
+    if (this.idlePreviewMeshes.length) {
+      return;
+    }
+
+    this.idlePreviewGeometry = this.sculptSphereGeometry || new THREE.SphereGeometry(
+      1,
+      DEBUG_SPHERE_WIDTH_SEGMENTS,
+      DEBUG_SPHERE_HEIGHT_SEGMENTS
+    );
+
+    this.idlePreviewMaterial = new THREE.MeshBasicMaterial({
+      color: this.paintMode === 'keep' ? 0x22c55e : 0xef4444,
+      transparent: true,
+      opacity: IDLE_BRUSH_OPACITY,
+      depthWrite: false,
+    });
+
+    for (let i = 0; i < MAX_IDLE_PREVIEW_SPHERES; i++) {
+      const mesh = new THREE.Mesh(this.idlePreviewGeometry, this.idlePreviewMaterial);
+      mesh.visible = false;
+      this.disableReticleRaycast(mesh);
+      this.idlePreviewGroup.add(mesh);
+      this.idlePreviewMeshes.push(mesh);
+      this.idlePreviewLastPositions.push(new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN));
+    }
+  }
+
+  updateIdlePreviewSphereScale() {
+    if (!this.idlePreviewMeshes.length) {
+      return;
+    }
+    const radius = Math.max(this.visualBrushRadius, 0.01);
+    for (const mesh of this.idlePreviewMeshes) {
+      mesh.scale.setScalar(radius);
+    }
+  }
+
+  hideIdlePreviewSpheres() {
+    if (!Array.isArray(this.idlePreviewMeshes)) {
+      this.idlePreviewMeshes = [];
+      return;
+    }
+    for (const mesh of this.idlePreviewMeshes) {
+      mesh.visible = false;
+    }
+  }
+
+  disposeIdlePreviewResources() {
+    if (!Array.isArray(this.idlePreviewMeshes)) {
+      this.idlePreviewMeshes = [];
+      this.idlePreviewLastPositions = [];
+      return;
+    }
+    for (const mesh of this.idlePreviewMeshes) {
+      this.idlePreviewGroup.remove(mesh);
+    }
+    this.idlePreviewMeshes = [];
+    this.idlePreviewLastPositions = [];
+    this.idlePreviewMaterial?.dispose?.();
+    this.idlePreviewMaterial = null;
+    if (this.idlePreviewGeometry && this.idlePreviewGeometry !== this.sculptSphereGeometry) {
+      this.idlePreviewGeometry.dispose?.();
+    }
+    this.idlePreviewGeometry = null;
+  }
+
   updateIdlePreview() {
-    if (!this.isDrawMode || this.isPinching || !this.meshes.length) return;
+    if (!this.isDrawMode || this.isPinching || !this.meshes.length) {
+      this.hideIdlePreviewSpheres();
+      return;
+    }
+
     const points = this.getIdlePreviewSources()
       .map((source) => this.resolveWorldPointFromSource(source))
-      .filter(Boolean);
-    if (!points.length) return;
+      .filter(Boolean)
+      .slice(0, MAX_IDLE_PREVIEW_SPHERES);
 
-    this.ensureSculptMesh();
-    this.visualStrokePoints = points;
-    this.strokeWorldPoints = [];
-    this.setBrushVisualIdle(true);
-    if (USE_DEBUG_SPHERE_BRUSH) {
-      this.refreshDebugSphereInstances();
-    } else {
-      this.rebuildSculptMesh();
+    if (!points.length) {
+      this.hideIdlePreviewSpheres();
+      return;
+    }
+
+    this.ensureIdlePreviewResources();
+    this.updateIdlePreviewSphereScale();
+
+    for (let i = 0; i < this.idlePreviewMeshes.length; i++) {
+      const mesh = this.idlePreviewMeshes[i];
+      const point = points[i];
+      if (!point) {
+        mesh.visible = false;
+        continue;
+      }
+
+      const lastPoint = this.idlePreviewLastPositions[i];
+      if (Number.isNaN(lastPoint.x) || lastPoint.distanceToSquared(point) > IDLE_PREVIEW_POSITION_EPSILON * IDLE_PREVIEW_POSITION_EPSILON) {
+        mesh.position.copy(point);
+        lastPoint.copy(point);
+      }
+      mesh.visible = true;
     }
   }
 
@@ -835,15 +931,9 @@ export class MeshSelectionController {
     const worldPoint = this.resolveWorldPointFromSource(source);
     if (!worldPoint) return;
 
+    this.hideIdlePreviewSpheres();
     this.setBrushVisualIdle(false);
     this.appendStrokePoint(worldPoint);
-
-    if (now - this.lastStatusTimeMs >= STATUS_INTERVAL_MS) {
-      this.onStatus(
-        `Discarding with sculpt brush on asset.`
-      );
-      this.lastStatusTimeMs = now;
-    }
     this.lastStampTimeMs = now;
   }
 
