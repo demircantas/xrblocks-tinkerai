@@ -43,6 +43,7 @@ const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
 const ENABLE_DEV_UI_SWITCH = xb.getUrlParamBool('enableDevUiSwitch', false) || DEBUG_UI;
 const ENABLE_ROCK_GESTURE_RECALL = xb.getUrlParamBool('enableRockGestureRecall', false);
+const KEYBOARD_PROMPT_INPUT = xb.getUrlParamBool('keyboardPromptInput', false);
 const DEV_UI_SWITCH_HOLD_MS = 1800;
 const UI_BUTTON_SCALE_FACTOR = 1.5;
 const TRANSFORM_TRANSLATE_STEP = 0.05;
@@ -169,6 +170,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.activeJobs = new Map();
     this.jobGroupState = new Map();
     this.isRecordingPrompt = false;
+    this.keyboardPromptInputEnabled = KEYBOARD_PROMPT_INPUT;
+    this.isKeyboardPromptCaptureActive = false;
     this.isPromptEditorOpen = false;
     this.promptKeyboard = null;
     this.assetInstances = new Map();
@@ -190,7 +193,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.devUiSwitchHoldButton = null;
     this.devUiSwitchHoldStartMs = 0;
     this.devUiSwitchHoldTriggered = false;
-    this.devUiToggleKeyHandler = (event) => this.handleDevUiKeyDown(event);
+    this.devUiToggleKeyHandler = (event) => this.handleGlobalKeyDown(event);
   }
 
   createEmptyWorkspaceState() {
@@ -224,10 +227,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.refreshCatalogUi();
     this.refreshWorkspaceCatalogUi();
     this.setDebugPanelVisibility(this.debugUiEnabled);
-    if (this.devUiSwitchEnabled) {
+    if (this.devUiSwitchEnabled || this.keyboardPromptInputEnabled) {
       window.addEventListener('keydown', this.devUiToggleKeyHandler);
+    }
+    if (this.devUiSwitchEnabled) {
       console.info(
         'Developer UI switch enabled. Hold the footer Debug UI / Flow UI button in XR or press Shift+D on desktop to toggle debug UI.'
+      );
+    }
+    if (this.keyboardPromptInputEnabled) {
+      console.info(
+        'Keyboard prompt input enabled. Guided prompt capture will use the hardware keyboard and Enter to confirm typed input.'
       );
     }
     this.updateUserFlowUi();
@@ -1220,6 +1230,127 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
+  handleGlobalKeyDown(event) {
+    this.handleKeyboardPromptKeyDown(event);
+    if (event.defaultPrevented) {
+      return;
+    }
+    this.handleDevUiKeyDown(event);
+  }
+
+  isKeyboardPromptFlowActive() {
+    if (!this.keyboardPromptInputEnabled || this.debugUiEnabled) {
+      return false;
+    }
+    if (this.baselineUiEnabled) {
+      return this.isNanobananaReferenceMode() || this.isNanobananaCompositeMode();
+    }
+    return this.userFlowMode === 'generate';
+  }
+
+  getUserFlowPromptActionLabel(waitingForConfirm = false) {
+    if (this.isKeyboardPromptCaptureActive) {
+      return 'Finish';
+    }
+    if (this.isKeyboardPromptFlowActive()) {
+      return waitingForConfirm ? 'Re-type' : 'Type Prompt';
+    }
+    return this.isRecordingPrompt ? 'Stop' : waitingForConfirm ? 'Re-record' : 'Push To Talk';
+  }
+
+  syncCurrentPromptToUi() {
+    this.workspaceState.prompt = this.currentPrompt;
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+    this.refreshPromptText();
+  }
+
+  startKeyboardPromptEntry() {
+    if (!this.isKeyboardPromptFlowActive()) {
+      return;
+    }
+    this.isKeyboardPromptCaptureActive = true;
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.confirmationTranscript = '';
+    this.currentPrompt = '';
+    this.syncCurrentPromptToUi();
+    if (!this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())) {
+      this.scheduleUserFlowPromptCapture();
+      this.setStatus('Type a prompt on the bluetooth keyboard. Screenshot will capture in 1 second, then press Enter.');
+    } else {
+      this.clearUserFlowPromptCaptureSchedule();
+      this.setStatus('Type a prompt on the bluetooth keyboard, then press Enter.');
+    }
+    this.updateUserFlowUi();
+  }
+
+  async finishKeyboardPromptEntry() {
+    if (!this.isKeyboardPromptCaptureActive) {
+      return;
+    }
+    this.isKeyboardPromptCaptureActive = false;
+    if (!this.currentPrompt.trim()) {
+      this.updateUserFlowUi();
+      this.setStatus('No prompt was typed. Type a prompt and press Enter.');
+      return;
+    }
+    await this.waitForUserFlowPromptCapture();
+    this.userFlowAwaitingPromptConfirmation = true;
+    this.showUserFlowCapturePreview();
+    this.updateUserFlowUi();
+    this.setStatus('I read "' + this.currentPrompt + '". Review it, then Confirm or Cancel.');
+  }
+
+  cancelKeyboardPromptEntry(statusText = 'Typed prompt cancelled.') {
+    this.isKeyboardPromptCaptureActive = false;
+    this.clearUserFlowPromptCaptureSchedule();
+    this.updateUserFlowUi();
+    this.setStatus(statusText);
+  }
+
+  handleKeyboardPromptKeyDown(event) {
+    if (!this.isKeyboardPromptFlowActive() || this.isPromptEditorOpen) {
+      return;
+    }
+    if (this.userFlowAwaitingPromptConfirmation) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void this.confirmUserFlowGeneratePrompt();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        this.cancelUserFlowGeneratePrompt();
+      }
+      return;
+    }
+    if (!this.isKeyboardPromptCaptureActive) {
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void this.finishKeyboardPromptEntry();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.cancelKeyboardPromptEntry();
+      return;
+    }
+    if (event.key === 'Backspace') {
+      event.preventDefault();
+      this.currentPrompt = this.currentPrompt.slice(0, -1);
+      this.syncCurrentPromptToUi();
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return;
+    }
+    if (event.key?.length === 1) {
+      event.preventDefault();
+      this.currentPrompt += event.key;
+      this.syncCurrentPromptToUi();
+    }
+  }
   handleDevUiKeyDown(event) {
     if (!this.devUiSwitchEnabled || event.repeat) {
       return;
@@ -1530,6 +1661,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.nanobananaFlowMode = 'composite';
     this.userFlowAwaitingPromptConfirmation = false;
+    this.isKeyboardPromptCaptureActive = false;
     this.confirmationTranscript = '';
     this.recordingPurpose = 'prompt';
     this.hideUserFlowCapturePreview();
@@ -1606,16 +1738,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
                 : '\nGenerate reference images first.'))
           : referenceCount
             ? 'Reference images: ' + referenceCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + referenceCount + '.'
-            : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
+            : this.isKeyboardPromptFlowActive()
+              ? 'Reference images: 0\nType a prompt on the bluetooth keyboard, then press Enter to review it.'
+              : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
 
     this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
       text: is3dMode
         ? 'Previous Mesh'
-        : this.isRecordingPrompt
-          ? 'Stop'
-          : waitingForConfirm
-            ? 'Re-record'
-            : 'Push To Talk',
+        : this.getUserFlowPromptActionLabel(waitingForConfirm),
       backgroundColor: is3dMode ? (meshCount > 1 ? '#334155' : '#1f2937') : '#9a3412',
       onTriggered: () => is3dMode ? this.stepActiveAsset(-1) : this.handleUserFlowRecordAction(),
     });
@@ -1793,14 +1923,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.userFlowModeText.text = 'Generate';
       this.userFlowDetailText.text = waitingForConfirm
         ? `Prompt: ${this.currentPrompt || '(empty)'}\nReview the prompt, then confirm or cancel.`
-        : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
+        : this.isKeyboardPromptFlowActive()
+          ? `Generated assets: ${assetCount}\nType a prompt on the bluetooth keyboard, then press Enter to review it.`
+          : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
 
       this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
-        text: this.isRecordingPrompt
-          ? 'Stop'
-          : waitingForConfirm
-            ? 'Re-record'
-            : 'Push To Talk',
+        text: this.getUserFlowPromptActionLabel(waitingForConfirm),
         backgroundColor: '#9a3412',
         onTriggered: () => this.handleUserFlowRecordAction(),
       });
@@ -2522,6 +2650,58 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus('Removed the last prompt character.');
   }
 
+  withNanobananaCapturePanelsHidden(callback) {
+    const shouldHideBaselinePanels = this.baselineUiEnabled && !this.debugUiEnabled;
+    if (!shouldHideBaselinePanels) {
+      return callback();
+    }
+
+    const previewPanel = this.userFlowPreviewPanel || null;
+    const referencePanel = this.userFlowReferenceGalleryPanel || null;
+    const previewImage = this.userFlowPreviewImage || null;
+    const referenceSlots = this.userFlowReferenceGallerySlots || [];
+    const previewVisible = previewPanel?.visible ?? false;
+    const referenceVisible = referencePanel?.visible ?? false;
+    const previewSrc = previewImage?.src || '';
+    const slotStates = referenceSlots.map((slot) => ({
+      panel: slot?.panel || null,
+      image: slot?.image || null,
+      panelVisible: slot?.panel?.visible ?? false,
+      src: slot?.image?.src || '',
+    }));
+
+    if (previewPanel) previewPanel.visible = false;
+    if (referencePanel) referencePanel.visible = false;
+    if (previewImage) previewImage.load('');
+    slotStates.forEach((slot) => {
+      if (slot.panel) slot.panel.visible = false;
+      if (slot.image) slot.image.load('');
+    });
+
+    const restore = () => {
+      if (previewImage && previewSrc) previewImage.load(previewSrc);
+      slotStates.forEach((slot) => {
+        if (slot.image && slot.src) slot.image.load(slot.src);
+        if (slot.panel) slot.panel.visible = slot.panelVisible;
+      });
+      if (previewPanel) previewPanel.visible = previewVisible;
+      if (referencePanel) referencePanel.visible = referenceVisible;
+      this.updateUserFlowUi();
+    };
+
+    try {
+      const result = callback();
+      if (result?.then) {
+        return result.finally(restore);
+      }
+      restore();
+      return result;
+    } catch (error) {
+      restore();
+      throw error;
+    }
+  }
+
   async getDeviceCameraSnapshotWithRetry() {
     const camera = xb.core.deviceCamera;
     if (!camera) {
@@ -2550,15 +2730,17 @@ export class Sam3dWorkspaceScene extends xb.Script {
         image = await loadImageAsDataUrl(DESKTOP_GEMINI_CAPTURE_URL);
         captureSource = 'desktop';
       } else {
-        const snapshot = await this.getDeviceCameraSnapshotWithRetry();
-        if (snapshot) {
-          image = snapshot;
-          captureSource = 'device-camera';
-        } else {
+        await this.withNanobananaCapturePanelsHidden(async () => {
+          const snapshot = await this.getDeviceCameraSnapshotWithRetry();
+          if (snapshot) {
+            image = snapshot;
+            captureSource = 'device-camera';
+            return;
+          }
           const useCameraOverlay = OVERLAY_ON_CAMERA && !!xb.core.deviceCamera;
           image = await xb.core.screenshotSynthesizer.getScreenshot(useCameraOverlay);
           captureSource = useCameraOverlay ? 'camera-overlay' : 'scene';
-        }
+        });
       }
 
       this.lastScreenshotDataUrl = image;
@@ -2661,6 +2843,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   handleUserFlowRecordAction() {
+    if (this.isKeyboardPromptFlowActive()) {
+      if (this.isKeyboardPromptCaptureActive) {
+        void this.finishKeyboardPromptEntry();
+      } else {
+        this.startKeyboardPromptEntry();
+      }
+      return;
+    }
     this.togglePromptRecording('prompt');
   }
 
@@ -2697,7 +2887,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
     if (!this.currentPrompt) {
-      this.setStatus('No prompt was captured. Push to talk and try again.');
+      this.setStatus(this.isKeyboardPromptFlowActive() ? 'No prompt was typed. Type a prompt and press Enter.' : 'No prompt was captured. Push to talk and try again.');
       return;
     }
 
@@ -2730,11 +2920,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   async confirmUserFlowGeneratePrompt() {
     if (!this.userFlowAwaitingPromptConfirmation) {
-      this.setStatus('Push to talk first to capture a prompt.');
+      this.setStatus(this.isKeyboardPromptFlowActive() ? 'Type a prompt first, then press Enter to review it.' : 'Push to talk first to capture a prompt.');
       return;
     }
 
     this.userFlowAwaitingPromptConfirmation = false;
+    this.isKeyboardPromptCaptureActive = false;
     this.hideUserFlowCapturePreview();
     this.updateUserFlowUi();
     if (this.baselineUiEnabled) {
@@ -2746,16 +2937,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   cancelUserFlowGeneratePrompt() {
     this.userFlowAwaitingPromptConfirmation = false;
+    this.isKeyboardPromptCaptureActive = false;
     this.confirmationTranscript = '';
     this.hideUserFlowCapturePreview();
     this.updateUserFlowUi();
-    this.setStatus('Prompt cancelled. Push to talk for a new try.');
+    this.setStatus(this.isKeyboardPromptFlowActive() ? 'Prompt cancelled. Type a new prompt and press Enter when ready.' : 'Prompt cancelled. Push to talk for a new try.');
   }
 
   enterGenerateMode() {
     if (this.baselineUiEnabled) {
       this.nanobananaFlowMode = 'reference-generate';
       this.userFlowAwaitingPromptConfirmation = false;
+      this.isKeyboardPromptCaptureActive = false;
       this.confirmationTranscript = '';
       this.recordingPurpose = 'prompt';
       this.hideUserFlowCapturePreview();
@@ -4464,7 +4657,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   dispose() {
-    if (this.devUiSwitchEnabled) {
+    if (this.devUiSwitchEnabled || this.keyboardPromptInputEnabled) {
       window.removeEventListener('keydown', this.devUiToggleKeyHandler);
     }
     this.clearDevUiSwitchHold();
