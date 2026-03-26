@@ -226,6 +226,57 @@ GET /baseline/{baselineId}/result
 
 The backend also persists the full run under `desktop-exp/backend/runs/{baselineId}`.
 
+## Forwarding Nano Banana Images Into SAM3D Generation
+
+When the frontend wants to turn a Nano Banana result into a 3D asset, it should call the XR generation route and mark the image as a Nano Banana artifact.
+
+### Route
+
+```text
+POST /generate
+```
+
+### Required flag
+
+Set:
+
+```json
+"artifactHint": "nanobanana"
+```
+
+### Why this matters
+
+For `artifactHint: "nanobanana"`, the backend now:
+
+- skips prompt-driven object isolation
+- attempts to build the input mask directly from the flat-background image using Python `rembg`
+
+This is the intended path for Nano Banana images with flat gray backgrounds.
+
+### Example request body
+
+```json
+{
+  "sessionId": "session-123",
+  "workspaceId": "workspace-local",
+  "prompt": "turn this notepad into a 3D model",
+  "artifactHint": "nanobanana",
+  "image": {
+    "mimeType": "image/png",
+    "dataUrl": "data:image/png;base64,..."
+  }
+}
+```
+
+### Important backend prerequisite
+
+The backend automask path requires:
+
+- Python `rembg`
+- `onnxruntime`
+
+If those are not installed in the runtime environment, Nano Banana -> SAM3D generation will fail explicitly rather than silently using the wrong mask path.
+
 ## Recommended Frontend Button Flow
 
 The intended first implementation is:

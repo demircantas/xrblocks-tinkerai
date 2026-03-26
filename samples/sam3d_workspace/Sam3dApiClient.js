@@ -53,7 +53,7 @@ export class Sam3dApiClient {
     }
   }
 
-  async createGenerationJob({sessionId, prompt, image}) {
+  async createGenerationJob({sessionId, prompt, image, artifactHint}) {
     if (this.useBackend) {
       const response = await fetch(`${this.backendUrl}/generate`, {
         method: 'POST',
@@ -63,7 +63,7 @@ export class Sam3dApiClient {
           workspaceId: this.workspaceId,
           prompt,
           image: parseDataUrl(image),
-          artifactHint: this.artifactHint || undefined,
+          artifactHint: (artifactHint ?? this.artifactHint) || undefined,
         }),
       });
       return await response.json();
@@ -115,6 +115,7 @@ export class Sam3dApiClient {
             numImages: 1,
             aspectRatio: 'auto',
             outputFormat: 'png',
+            safetyTolerance: null,
             limitGenerations: true,
           },
         }),
