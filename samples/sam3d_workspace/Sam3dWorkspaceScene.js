@@ -164,6 +164,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.lastScreenshotDataUrl = '';
     this.currentJobId = null;
     this.pollHandle = null;
+    this.isPollingJobs = false;
+    this.handledCompletedJobIds = new Set();
     this.activeJobs = new Map();
     this.jobGroupState = new Map();
     this.isRecordingPrompt = false;
@@ -4022,13 +4024,19 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   scheduleJobPoll() {
-    if (this.pollHandle || !this.activeJobs.size) {
+    if (this.pollHandle || this.isPollingJobs || !this.activeJobs.size) {
       return;
     }
 
     this.pollHandle = setTimeout(async () => {
       this.pollHandle = null;
-      await this.pollTrackedJobs();
+      this.isPollingJobs = true;
+      try {
+        await this.pollTrackedJobs();
+      } finally {
+        this.isPollingJobs = false;
+        this.scheduleJobPoll();
+      }
     }, POLL_INTERVAL_MS);
   }
 
@@ -4083,6 +4091,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
       this.activeJobs.delete(trackedJob.jobId);
 
+      if (this.handledCompletedJobIds.has(trackedJob.jobId)) {
+        this.resetJobGroupStateIfIdle(trackedJob.queueGroup);
+        continue;
+      }
+
       if (trackedJob.queueGroup) {
         const groupState = this.jobGroupState.get(trackedJob.queueGroup);
         if (groupState) {
@@ -4096,6 +4109,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         continue;
       }
 
+      this.handledCompletedJobIds.add(trackedJob.jobId);
       await trackedJob.onCompleted?.(update);
       this.resetJobGroupStateIfIdle(trackedJob.queueGroup);
     }
@@ -4110,6 +4124,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   startPollingJob(jobId, {jobLabel = 'Job', onCompleted, failedMessage = 'Job failed.', queueGroup = null, itemLabel = '', runningVerb = 'running'} = {}) {
+    if (this.activeJobs.has(jobId) || this.handledCompletedJobIds.has(jobId)) {
+      return;
+    }
+
     let sequenceNumber = null;
     if (queueGroup) {
       const groupState = this.getJobGroupState(queueGroup);
@@ -4213,6 +4231,23 @@ export class Sam3dWorkspaceScene extends xb.Script {
   async loadGeneratedAsset(asset, sourceLabel = 'Generated') {
     const existingRecord = this.getAssetRecord(asset.assetId);
     const assetRecord = this.createAssetRecordFromResponse(asset, existingRecord);
+
+    if (
+      existingRecord &&
+      existingRecord.glbUrl === assetRecord.glbUrl &&
+      this.assetInstances.has(assetRecord.assetId)
+    ) {
+      this.upsertAssetRecord(assetRecord);
+      this.setActiveAsset(assetRecord.assetId);
+      this.currentPrompt = assetRecord.prompt || this.currentPrompt;
+      this.workspaceState.prompt = this.currentPrompt;
+      this.refreshPromptText();
+      this.setStatus(
+        `${sourceLabel} asset already loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
+      );
+      return this.assetInstances.get(assetRecord.assetId)?.authoredRoot || null;
+    }
+
     const authoredRoot = await this.instantiateAssetRecord(assetRecord);
     assetRecord.transformMatrix = this.getPersistedTransformMatrix(
       authoredRoot,
@@ -4225,6 +4260,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus(
       `${sourceLabel} asset loaded. Active asset: ${assetRecord.assetId}. Workspace assets: ${this.workspaceState.assets.length}.`
     );
+    return authoredRoot;
   }
 
   getPersistedTransformMatrix(model, fallbackMatrix = null) {
@@ -4365,6 +4401,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.currentJobId = null;
     this.activeJobs.clear();
     this.jobGroupState.clear();
+    this.handledCompletedJobIds.clear();
+    this.isPollingJobs = false;
     this.clearAssetInstances();
     this.activeAssetId = null;
     this.isSelectionMode = false;
@@ -4437,6 +4475,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
     this.activeJobs.clear();
     this.jobGroupState.clear();
+    this.handledCompletedJobIds.clear();
+    this.isPollingJobs = false;
     this.hideUserFlowCapturePreview();
     this.clearUserFlowPromptCaptureSchedule();
     this.transformGizmoController?.dispose();
