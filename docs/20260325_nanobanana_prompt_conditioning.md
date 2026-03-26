@@ -52,7 +52,7 @@ Create a clean single-object reference image from headset screenshot context plu
 ### Fixed conditioning suffix
 
 ```text
-Show a single centered object only. Place it against a flat neutral gray background with no environment, no room context, no floor plane, no shadows on a surface, no text, no labels, and no extra props. Use soft even studio lighting and realistic materials that clearly show the object shape. Keep the full object visible and unobstructed. Make the silhouette clean and easy to separate from the background.
+Use the provided screenshot only as visual reference. Identify only the object requested by the prompt and isolate that object from the busy scene. Remove all other objects, desk clutter, background context, room context, text, labels, and extra props. Show a single centered object only against a flat neutral gray background with soft even studio lighting, realistic materials, full visibility, and a clean silhouette that is easy to separate from the background.
 ```
 
 ### Notes
@@ -67,9 +67,9 @@ This stage should strongly bias toward:
 ### Example final prompt
 
 ```text
-Generate a ceramic coffee mug with a rounded handle and matte finish.
+Create a mug.
 
-Show a single centered object only. Place it against a flat neutral gray background with no environment, no room context, no floor plane, no shadows on a surface, no text, no labels, and no extra props. Use soft even studio lighting and realistic materials that clearly show the object shape. Keep the full object visible and unobstructed. Make the silhouette clean and easy to separate from the background.
+Use the provided screenshot only as visual reference. Identify only the object requested by the prompt and isolate that object from the busy scene. Remove all other objects, desk clutter, background context, room context, text, labels, and extra props. Show a single centered object only against a flat neutral gray background with soft even studio lighting, realistic materials, full visibility, and a clean silhouette that is easy to separate from the background.
 ```
 
 ## Stage 2: Composite

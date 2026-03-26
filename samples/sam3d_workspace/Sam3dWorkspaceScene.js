@@ -25,6 +25,18 @@ const SAMPLE_VERSION = 'workspace-selection-v1';
 const USER_CAPTURE_PREVIEW_MS = 4000;
 const DEVICE_CAMERA_SNAPSHOT_WAIT_MS = 2000;
 const DEVICE_CAMERA_SNAPSHOT_POLL_MS = 100;
+const NANOBANANA_REFERENCE_PROMPT_SUFFIX = `Use the provided screenshot only as visual reference. Identify only the object requested by the prompt and isolate that object from the busy scene. Remove all other objects, desk clutter, background context, room context, text, labels, and extra props. Show a single centered object only against a flat neutral gray background with soft even studio lighting, realistic materials, full visibility, and a clean silhouette that is easy to separate from the background.`;
+
+function buildConditionedNanobananaPrompt(userPrompt, stage = 'reference') {
+  const trimmedPrompt = (userPrompt || '').trim();
+  if (!trimmedPrompt) return '';
+  if (stage === 'reference') {
+    return `${trimmedPrompt}
+
+${NANOBANANA_REFERENCE_PROMPT_SUFFIX}`;
+  }
+  return trimmedPrompt;
+}
 const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
 const MODE_COMPOSE_COLOR = '#7c3aed';
@@ -1260,10 +1272,12 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
+    const conditionedPrompt = buildConditionedNanobananaPrompt(this.currentPrompt, 'reference');
+
     const job = await this.apiClient.createNanobananaGenerationJob({
       sessionId: this.sessionId,
       workspaceId: this.userFlowWorkspaceId || this.apiClient.workspaceId,
-      prompt: this.currentPrompt,
+      prompt: conditionedPrompt,
       images: [this.lastScreenshotDataUrl],
     });
     this.setStatus('Nano Banana job queued: ' + job.jobId);
@@ -1281,7 +1295,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         this.nanobananaResults.push({
           baselineId: baseline.baselineId,
           imageUrl: baseline.imageUrl,
-          prompt: baseline.metadata?.prompt || this.currentPrompt,
+          prompt: this.currentPrompt,
           sourceCaptureDataUrl: this.lastScreenshotDataUrl,
           savedAt: baseline.savedAt || Date.now(),
           metadata: baseline.metadata || {},
