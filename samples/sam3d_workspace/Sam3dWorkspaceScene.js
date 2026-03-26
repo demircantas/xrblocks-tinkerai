@@ -1482,6 +1482,40 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
   }
 
+  async generateNanobananaTo3d() {
+    const activeComposite = this.getActiveNanobananaCompositeResult();
+    if (!activeComposite) {
+      this.setStatus('Generate or select a composite image before sending it to 3D.');
+      return;
+    }
+
+    const imageDataUrl = await this.getNanobananaResultDataUrl(activeComposite);
+    if (!imageDataUrl) {
+      this.setStatus('The selected composite image could not be loaded for 3D generation.');
+      return;
+    }
+
+    const prompt = (activeComposite.prompt || this.currentPrompt || 'Create a 3D model of this image.').trim();
+    const job = await this.apiClient.createGenerationJob({
+      sessionId: this.sessionId,
+      prompt,
+      image: imageDataUrl,
+      artifactHint: 'nanobanana',
+    });
+    this.setStatus(`3D generation job queued: ${job.jobId}`);
+    this.startPollingJob(job.jobId, {
+      jobLabel: '3D Generation',
+      queueGroup: 'nanobanana-3d',
+      itemLabel: '3D Object',
+      runningVerb: 'generating',
+      onCompleted: async (update) => {
+        await this.loadGeneratedAsset(update.asset, 'Generated');
+        this.setStatus('3D asset generated from the Nano Banana composite.');
+      },
+      failedMessage: '3D generation failed.',
+    });
+  }
+
   enterNanobananaCompositeMode() {
     if (!this.nanobananaResults.length) {
       this.setStatus('Generate at least one reference image before moving to Composite.');
@@ -1588,8 +1622,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       });
       this.configureUserFlowButton(SLOT_MODE_FORWARD, {
         text: 'To 3D',
-        backgroundColor: MODE_COMPOSE_COLOR,
-        onTriggered: () => this.setStatus('Nano Banana to 3D is the next step and is not implemented yet.'),
+        backgroundColor: activeComposite ? MODE_COMPOSE_COLOR : '#1f2937',
+        onTriggered: () => this.generateNanobananaTo3d(),
       });
       this.configureUserFlowButton(SLOT_DELETE, {
         text: 'Delete Image',
