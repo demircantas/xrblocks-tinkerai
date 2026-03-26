@@ -373,7 +373,7 @@ export class MeshSelectionController {
   }
 
   getVisualPointSpacing() {
-    return Math.max(this.visualBrushRadius * 0.45, this.sampleStepDistance * 1.5);
+    return Math.max(this.visualBrushRadius * 0.3, this.sampleStepDistance * 0.9);
   }
 
   appendVisualStrokePoint(point) {
