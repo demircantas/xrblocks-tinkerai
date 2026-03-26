@@ -1656,6 +1656,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
         backgroundColor: MODE_COMPOSE_COLOR,
         onTriggered: () => this.enterNanobananaCompositeMode(),
       });
+      this.configureUserFlowButton(SLOT_RESET, {
+        text: 'Reset',
+        backgroundColor: meshCount ? '#0f766e' : '#1f2937',
+        onTriggered: (controllerId) => this.resetActiveAssetToHand(controllerId),
+      });
     } else if (isCompositeMode) {
       this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Generate',
