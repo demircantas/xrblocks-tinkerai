@@ -108,6 +108,17 @@ function applyTextButtonBackgroundColor(button, colorValue) {
   }
 }
 
+function loadImageIfChanged(imageView, src = '') {
+  if (!imageView) return;
+  const nextSrc = src || '';
+  imageView.userData ||= {};
+  if ((imageView.userData.lastLoadedSrc || '') === nextSrc) {
+    return;
+  }
+  imageView.userData.lastLoadedSrc = nextSrc;
+  imageView.load(nextSrc);
+}
+
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
@@ -1833,10 +1844,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     if (waitingForConfirm && !isCompositeMode && !is3dMode && this.lastScreenshotDataUrl) {
       this.userFlowPreviewPanel.visible = true;
-      this.userFlowPreviewImage.load(this.lastScreenshotDataUrl);
+      loadImageIfChanged(this.userFlowPreviewImage, this.lastScreenshotDataUrl);
     } else if (activeResult?.imageUrl) {
       this.userFlowPreviewPanel.visible = true;
-      this.userFlowPreviewImage.load(activeResult.imageUrl);
+      loadImageIfChanged(this.userFlowPreviewImage, activeResult.imageUrl);
     } else if (this.userFlowPreviewPanel) {
       this.userFlowPreviewPanel.visible = false;
     }
@@ -1855,7 +1866,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       const src = safeSources[index] || '';
       slot.panel.visible = Boolean(src);
       if (src) {
-        slot.image.load(src);
+        loadImageIfChanged(slot.image, src);
       }
     });
 
@@ -2651,11 +2662,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   withNanobananaCapturePanelsHidden(callback) {
-    const shouldHideBaselinePanels = this.baselineUiEnabled && !this.debugUiEnabled;
-    if (!shouldHideBaselinePanels) {
+    const shouldSuspendGuidedPreviewImages = !this.debugUiEnabled;
+    if (!shouldSuspendGuidedPreviewImages) {
       return callback();
     }
 
+    const mainPreviewImage = this.previewImage || null;
+    const mainPreviewSrc = mainPreviewImage?.src || '';
     const previewPanel = this.userFlowPreviewPanel || null;
     const referencePanel = this.userFlowReferenceGalleryPanel || null;
     const previewImage = this.userFlowPreviewImage || null;
@@ -2672,16 +2685,18 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     if (previewPanel) previewPanel.visible = false;
     if (referencePanel) referencePanel.visible = false;
-    if (previewImage) previewImage.load('');
+    if (mainPreviewImage) loadImageIfChanged(mainPreviewImage, '');
+    if (previewImage) loadImageIfChanged(previewImage, '');
     slotStates.forEach((slot) => {
       if (slot.panel) slot.panel.visible = false;
-      if (slot.image) slot.image.load('');
+      if (slot.image) loadImageIfChanged(slot.image, '');
     });
 
     const restore = () => {
-      if (previewImage && previewSrc) previewImage.load(previewSrc);
+      if (mainPreviewImage) loadImageIfChanged(mainPreviewImage, mainPreviewSrc);
+      if (previewImage) loadImageIfChanged(previewImage, previewSrc);
       slotStates.forEach((slot) => {
-        if (slot.image && slot.src) slot.image.load(slot.src);
+        if (slot.image) loadImageIfChanged(slot.image, slot.src);
         if (slot.panel) slot.panel.visible = slot.panelVisible;
       });
       if (previewPanel) previewPanel.visible = previewVisible;
@@ -2745,9 +2760,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
       this.lastScreenshotDataUrl = image;
       this.workspaceState.lastScreenshotDataUrl = image;
-      this.previewImage.load(image);
+      loadImageIfChanged(this.previewImage, image);
       if (this.userFlowPreviewImage) {
-        this.userFlowPreviewImage.load(image);
+        loadImageIfChanged(this.userFlowPreviewImage, image);
       }
       this.showUserFlowCapturePreview();
       this.setStatus(
@@ -4538,9 +4553,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
 
     this.lastScreenshotDataUrl = this.workspaceState.lastScreenshotDataUrl;
-    this.previewImage.load(this.lastScreenshotDataUrl || '');
+    loadImageIfChanged(this.previewImage, this.lastScreenshotDataUrl || '');
     if (this.userFlowPreviewImage) {
-      this.userFlowPreviewImage.load(this.lastScreenshotDataUrl || '');
+      loadImageIfChanged(this.userFlowPreviewImage, this.lastScreenshotDataUrl || '');
     }
 
     const savedAssets = saved.workspace.assets || [];
