@@ -1266,6 +1266,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return this.baselineUiEnabled && this.nanobananaFlowMode === 'composite';
   }
 
+  isNanobanana3dMode() {
+    return this.baselineUiEnabled && this.nanobananaFlowMode === '3d';
+  }
+
   getActiveNanobananaResult() {
     if (!this.nanobananaResults.length) return null;
     const safeIndex = THREE.MathUtils.clamp(
@@ -1510,7 +1514,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       runningVerb: 'generating',
       onCompleted: async (update) => {
         await this.loadGeneratedAsset(update.asset, 'Generated');
-        this.setStatus('3D asset generated from the Nano Banana composite.');
+        this.enterNanobanana3dMode();
       },
       failedMessage: '3D generation failed.',
     });
@@ -1527,19 +1531,39 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.confirmationTranscript = '';
     this.recordingPurpose = 'prompt';
     this.hideUserFlowCapturePreview();
+    this.syncTransformGizmo();
+    this.applyWorkspaceInteractionPolicy();
     this.updateUserFlowUi();
     this.setStatus('Nano Banana composite mode. Record a prompt to combine all remaining reference images.');
+  }
+
+  enterNanobanana3dMode() {
+    this.nanobananaFlowMode = '3d';
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.confirmationTranscript = '';
+    this.recordingPurpose = 'prompt';
+    this.hideUserFlowCapturePreview();
+    this.isSelectionMode = false;
+    this.selectionController?.setDrawMode(false);
+    this.syncSelectionController();
+    this.syncTransformGizmo();
+    this.applyWorkspaceInteractionPolicy();
+    this.updateSelectionUi();
+    this.updateUserFlowUi();
+    this.setStatus('Nano Banana 3D mode. Use the gizmo to move the active mesh.');
   }
 
   updateNanobananaFlowUi() {
     const waitingForConfirm = this.userFlowAwaitingPromptConfirmation;
     const isCompositeMode = this.isNanobananaCompositeMode();
+    const is3dMode = this.isNanobanana3dMode();
     const referenceCount = this.nanobananaResults.length;
     const compositeCount = this.nanobananaCompositeResults.length;
-    const hasResults = isCompositeMode ? compositeCount > 0 : referenceCount > 0;
+    const meshCount = this.workspaceState.assets.length;
+    const hasResults = is3dMode ? meshCount > 0 : (isCompositeMode ? compositeCount > 0 : referenceCount > 0);
     const activeReference = this.getActiveNanobananaResult();
     const activeComposite = this.getActiveNanobananaCompositeResult();
-    const activeResult = isCompositeMode ? (activeComposite || activeReference) : activeReference;
+    const activeResult = is3dMode ? activeComposite : (isCompositeMode ? (activeComposite || activeReference) : activeReference);
     const referenceGallerySources = isCompositeMode
       ? this.nanobananaResults.map((result) => result?.imageUrl).filter(Boolean)
       : [];
@@ -1559,62 +1583,80 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.configureUserFlowButton(i, {visible: false});
     }
 
-    this.userFlowModeText.text = isCompositeMode ? 'Nano Banana Composite' : 'Nano Banana Generate';
+    this.userFlowModeText.text = is3dMode
+      ? 'Nano Banana 3D'
+      : isCompositeMode
+        ? 'Nano Banana Composite'
+        : 'Nano Banana Generate';
     this.userFlowDetailText.text = waitingForConfirm
       ? (isCompositeMode
           ? 'Composite prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.'
           : 'Prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.')
-      : isCompositeMode
-        ? ('Reference images: ' + referenceCount + '\nComposite images: ' + compositeCount + (compositeCount
-            ? '\nActive composite ' + (this.activeNanobananaCompositeResultIndex + 1) + '/' + compositeCount + '.'
-            : referenceCount
-              ? '\nAll remaining reference images will be used.'
-              : '\nGenerate reference images first.'))
-        : referenceCount
-          ? 'Reference images: ' + referenceCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + referenceCount + '.'
-          : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
+      : is3dMode
+        ? (meshCount
+            ? this.getActiveAssetOrdinalText() + '\nUse the gizmo to move, rotate, or scale the active mesh.'
+            : '3D meshes: 0\nUse To 3D from Composite to create a mesh.')
+        : isCompositeMode
+          ? ('Reference images: ' + referenceCount + '\nComposite images: ' + compositeCount + (compositeCount
+              ? '\nActive composite ' + (this.activeNanobananaCompositeResultIndex + 1) + '/' + compositeCount + '.'
+              : referenceCount
+                ? '\nAll remaining reference images will be used.'
+                : '\nGenerate reference images first.'))
+          : referenceCount
+            ? 'Reference images: ' + referenceCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + referenceCount + '.'
+            : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
 
     this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
-      text: this.isRecordingPrompt
-        ? 'Stop'
-        : waitingForConfirm
-          ? 'Re-record'
-          : 'Push To Talk',
-      backgroundColor: '#9a3412',
-      onTriggered: () => this.handleUserFlowRecordAction(),
+      text: is3dMode
+        ? 'Previous Mesh'
+        : this.isRecordingPrompt
+          ? 'Stop'
+          : waitingForConfirm
+            ? 'Re-record'
+            : 'Push To Talk',
+      backgroundColor: is3dMode ? (meshCount > 1 ? '#334155' : '#1f2937') : '#9a3412',
+      onTriggered: () => is3dMode ? this.stepActiveAsset(-1) : this.handleUserFlowRecordAction(),
     });
 
     this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
-      text: 'Confirm',
-      backgroundColor: waitingForConfirm
-        ? (isCompositeMode ? MODE_COMPOSE_COLOR : MODE_GENERATE_COLOR)
-        : '#1f2937',
-      onTriggered: () => this.confirmUserFlowGeneratePrompt(),
-      visible: waitingForConfirm,
+      text: is3dMode ? 'Delete Mesh' : 'Confirm',
+      backgroundColor: is3dMode
+        ? (meshCount ? '#b91c1c' : '#1f2937')
+        : waitingForConfirm
+          ? (isCompositeMode ? MODE_COMPOSE_COLOR : MODE_GENERATE_COLOR)
+          : '#1f2937',
+      onTriggered: () => is3dMode ? this.deleteActiveAssetFromWorkspace() : this.confirmUserFlowGeneratePrompt(),
+      visible: is3dMode || waitingForConfirm,
     });
 
     this.configureUserFlowButton(SLOT_SECONDARY_RIGHT, {
-      text: 'Cancel',
-      backgroundColor: '#6b7280',
-      onTriggered: () => this.cancelUserFlowGeneratePrompt(),
-      visible: waitingForConfirm,
+      text: is3dMode ? 'Next Mesh' : 'Cancel',
+      backgroundColor: is3dMode ? (meshCount > 1 ? '#334155' : '#1f2937') : '#6b7280',
+      onTriggered: () => is3dMode ? this.stepActiveAsset(1) : this.cancelUserFlowGeneratePrompt(),
+      visible: is3dMode || waitingForConfirm,
     });
 
     this.configureUserFlowButton(SLOT_PREVIOUS, {
       text: 'Previous',
       backgroundColor: hasResults ? '#334155' : '#1f2937',
       onTriggered: () => isCompositeMode ? this.stepNanobananaCompositeResult(-1) : this.stepNanobananaResult(-1),
-      visible: hasResults,
+      visible: hasResults && !is3dMode,
     });
 
     this.configureUserFlowButton(SLOT_NEXT, {
       text: 'Next',
       backgroundColor: hasResults ? '#334155' : '#1f2937',
       onTriggered: () => isCompositeMode ? this.stepNanobananaCompositeResult(1) : this.stepNanobananaResult(1),
-      visible: hasResults,
+      visible: hasResults && !is3dMode,
     });
 
-    if (isCompositeMode) {
+    if (is3dMode) {
+      this.configureUserFlowButton(SLOT_MODE_BACK, {
+        text: 'To Composite',
+        backgroundColor: MODE_COMPOSE_COLOR,
+        onTriggered: () => this.enterNanobananaCompositeMode(),
+      });
+    } else if (isCompositeMode) {
       this.configureUserFlowButton(SLOT_MODE_BACK, {
         text: 'To Generate',
         backgroundColor: MODE_GENERATE_COLOR,
@@ -1652,7 +1694,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.updateUserFlowReferenceGallery(referenceGallerySources);
 
-    if (waitingForConfirm && !isCompositeMode && this.lastScreenshotDataUrl) {
+    if (waitingForConfirm && !isCompositeMode && !is3dMode && this.lastScreenshotDataUrl) {
       this.userFlowPreviewPanel.visible = true;
       this.userFlowPreviewImage.load(this.lastScreenshotDataUrl);
     } else if (activeResult?.imageUrl) {
@@ -2710,6 +2752,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.confirmationTranscript = '';
       this.recordingPurpose = 'prompt';
       this.hideUserFlowCapturePreview();
+      this.syncTransformGizmo();
+      this.applyWorkspaceInteractionPolicy();
       this.updateUserFlowUi();
       this.setStatus('Nano Banana reference mode resumed.');
       return;
@@ -2739,7 +2783,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
   shouldEnableTransformTools() {
     if (this.baselineUiEnabled && !this.debugUiEnabled) {
-      return false;
+      return this.isNanobanana3dMode();
     }
     return this.debugUiEnabled || ['generate', 'segment', 'compose'].includes(this.userFlowMode);
   }
