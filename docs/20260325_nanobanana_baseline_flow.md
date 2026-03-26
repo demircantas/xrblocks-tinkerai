@@ -131,8 +131,9 @@ Only the frontend state changes:
 
 Recommended UX:
 
-- show selected reference images in a small gallery row
-- allow user to mark images as included/excluded from the composite request
+- show the current reference image set in a small gallery row
+- assume all remaining reference images are included in the composite request
+- let the user remove unwanted reference images with `Delete Image`
 - provide a new prompt capture flow with the same confirmation pattern:
   - voice prompt
   - prompt preview
@@ -140,16 +141,17 @@ Recommended UX:
   - `Cancel`
   - `Re-record`
 - on confirm:
-  - send selected generated images as `images[]`
+  - send all remaining generated images as `images[]`
   - send the composite prompt
   - poll job
   - show returned composite image
 
 Important state:
 
-- `selectedReferenceResultIds`
 - `compositePrompt`
 - `compositeResult`
+- current reference result list
+- no per-image include toggle in the first version
 
 Recommended output model:
 
@@ -231,7 +233,6 @@ Primary controls:
 - `Next`
 - `To Generate`
 - `To 3D`
-- optional `Include/Exclude`
 - optional `Delete Image`
 
 Main content:
@@ -272,7 +273,6 @@ Recommended baseline state object:
     savedAt: number,
   }>,
   activeReferenceIndex: number,
-  selectedReferenceIdsForComposite: string[],
   compositePrompt: string,
   compositeResults: Array<{
     baselineId: string,
@@ -295,6 +295,7 @@ We should reuse as much as possible from the existing frontend:
 - prompt confirmation UI pattern
 - polling helper pattern
 - preview panel behavior
+- Nano Banana prompt conditioning suffixes from [20260325_nanobanana_prompt_conditioning.md](/d:/xrblocks/docs/20260325_nanobanana_prompt_conditioning.md)
 - status messaging
 - previous/next navigation pattern
 - cancel / confirm / re-record semantics
@@ -355,3 +356,7 @@ For the first implementation, keep the baseline workflow intentionally narrow:
 - same confirm/cancel/re-record rhythm as the main tool
 
 That will make the study comparison much cleaner than trying to hybridize the baseline into the existing SAM3D flow.
+
+
+
+
