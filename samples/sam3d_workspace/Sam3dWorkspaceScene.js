@@ -26,16 +26,17 @@ const USER_CAPTURE_PREVIEW_MS = 4000;
 const DEVICE_CAMERA_SNAPSHOT_WAIT_MS = 2000;
 const DEVICE_CAMERA_SNAPSHOT_POLL_MS = 100;
 const NANOBANANA_REFERENCE_PROMPT_SUFFIX = `Use the provided screenshot only as visual reference. Identify only the object requested by the prompt and isolate that object from the busy scene. Remove all other objects, desk clutter, background context, room context, text, labels, and extra props. Show a single centered object only against a flat neutral gray background with soft even studio lighting, realistic materials, full visibility, and a clean silhouette that is easy to separate from the background.`;
+const NANOBANANA_COMPOSITE_PROMPT_SUFFIX = `Create one clean composite image that combines the referenced objects into a single coherent arrangement. Keep all objects fully visible and unobstructed. Use a flat neutral gray background with no environment, no room context, no floor plane, no extra props, no text, and no labels. Use soft even studio lighting and realistic materials that preserve clear object boundaries and surface shape. The result should be easy to segment from the background for later 3D generation.`;
 
 function buildConditionedNanobananaPrompt(userPrompt, stage = 'reference') {
   const trimmedPrompt = (userPrompt || '').trim();
   if (!trimmedPrompt) return '';
-  if (stage === 'reference') {
-    return `${trimmedPrompt}
+  const suffix = stage === 'compose'
+    ? NANOBANANA_COMPOSITE_PROMPT_SUFFIX
+    : NANOBANANA_REFERENCE_PROMPT_SUFFIX;
+  return `${trimmedPrompt}
 
-${NANOBANANA_REFERENCE_PROMPT_SUFFIX}`;
-  }
-  return trimmedPrompt;
+${suffix}`;
 }
 const MODE_GENERATE_COLOR = '#2563eb';
 const MODE_SEGMENT_COLOR = '#0f766e';
@@ -147,6 +148,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.nanobananaFlowMode = 'reference-generate';
     this.nanobananaResults = [];
     this.activeNanobananaResultIndex = 0;
+    this.nanobananaCompositeResults = [];
+    this.activeNanobananaCompositeResultIndex = 0;
     this.devUiSwitchEnabled = ENABLE_DEV_UI_SWITCH;
     this.userFlowMode = 'generate';
     this.userFlowWorkspaceId = null;
@@ -1002,7 +1005,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       paddingY: 0.01,
     });
 
-    const userPreviewRow = userGrid.addRow({weight: 0.22});
+    const userPreviewRow = userGrid.addRow({weight: 0.18});
     this.userFlowPreviewPanel = userPreviewRow.addPanel({
       backgroundColor: '#0f172acc',
       height: 0.94,
@@ -1018,6 +1021,38 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
     this.userFlowPreviewPanel.visible = false;
     this.userFlowPreviewPanel.updateLayouts();
+
+    const userReferenceGalleryRow = userGrid.addRow({weight: 0.12});
+    this.userFlowReferenceGalleryPanel = userReferenceGalleryRow.addPanel({
+      backgroundColor: '#0f172acc',
+      height: 0.94,
+      width: 0.94,
+      showEdge: true,
+    });
+    const userReferenceGalleryGrid = this.userFlowReferenceGalleryPanel.addGrid();
+    this.userFlowReferenceGallerySlots = [];
+    for (let galleryRowIndex = 0; galleryRowIndex < 2; galleryRowIndex++) {
+      const galleryRow = userReferenceGalleryGrid.addRow({weight: 0.5});
+      for (let galleryColIndex = 0; galleryColIndex < 4; galleryColIndex++) {
+        const slotPanel = galleryRow.addCol({weight: 0.25}).addPanel({
+          backgroundColor: '#111827cc',
+          height: 0.9,
+          width: 0.9,
+          showEdge: true,
+        });
+        const slotGrid = slotPanel.addGrid();
+        slotGrid.addRow({weight: 1.0});
+        const slotImage = slotGrid.addImage({
+          src: '',
+          paddingX: 0.02,
+          paddingY: 0.02,
+        });
+        slotPanel.visible = false;
+        this.userFlowReferenceGallerySlots.push({panel: slotPanel, image: slotImage});
+      }
+    }
+    this.userFlowReferenceGalleryPanel.visible = false;
+    this.userFlowReferenceGalleryPanel.updateLayouts();
 
     this.userFlowButtons = [];
     for (let rowIndex = 0; rowIndex < 5; rowIndex++) {
@@ -1227,6 +1262,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return this.baselineUiEnabled && this.nanobananaFlowMode === 'reference-generate';
   }
 
+  isNanobananaCompositeMode() {
+    return this.baselineUiEnabled && this.nanobananaFlowMode === 'composite';
+  }
+
   getActiveNanobananaResult() {
     if (!this.nanobananaResults.length) return null;
     const safeIndex = THREE.MathUtils.clamp(
@@ -1261,6 +1300,84 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setStatus(removed ? 'Deleted baseline image.' : 'No baseline image to delete.');
   }
 
+  getActiveNanobananaCompositeResult() {
+    if (!this.nanobananaCompositeResults.length) return null;
+    const safeIndex = THREE.MathUtils.clamp(
+      this.activeNanobananaCompositeResultIndex,
+      0,
+      this.nanobananaCompositeResults.length - 1
+    );
+    this.activeNanobananaCompositeResultIndex = safeIndex;
+    return this.nanobananaCompositeResults[safeIndex] || null;
+  }
+
+  stepNanobananaCompositeResult(direction) {
+    if (!this.nanobananaCompositeResults.length) return;
+    const length = this.nanobananaCompositeResults.length;
+    this.activeNanobananaCompositeResultIndex = (
+      this.activeNanobananaCompositeResultIndex + direction + length
+    ) % length;
+    const activeResult = this.getActiveNanobananaCompositeResult();
+    this.updateUserFlowUi();
+    this.setStatus(
+      activeResult
+        ? 'Browsing composite image ' + (this.activeNanobananaCompositeResultIndex + 1) + '/' + length + '.'
+        : 'No composite image selected.'
+    );
+  }
+
+  deleteActiveNanobananaCompositeResult() {
+    if (!this.nanobananaCompositeResults.length) return;
+    const removed = this.nanobananaCompositeResults.splice(this.activeNanobananaCompositeResultIndex, 1)[0];
+    if (this.activeNanobananaCompositeResultIndex >= this.nanobananaCompositeResults.length) {
+      this.activeNanobananaCompositeResultIndex = Math.max(0, this.nanobananaCompositeResults.length - 1);
+    }
+    this.updateUserFlowUi();
+    this.setStatus(removed ? 'Deleted composite image.' : 'No composite image to delete.');
+  }
+
+  findNanobananaResultIndex(results, candidate) {
+    if (!Array.isArray(results) || !candidate) return -1;
+    const baselineId = candidate.baselineId || '';
+    const imageUrl = candidate.imageUrl || '';
+    return results.findIndex((result) => {
+      if (baselineId && result?.baselineId === baselineId) {
+        return true;
+      }
+      if (!baselineId && imageUrl && result?.imageUrl === imageUrl) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  upsertNanobananaResult(results, candidate) {
+    const existingIndex = this.findNanobananaResultIndex(results, candidate);
+    if (existingIndex >= 0) {
+      results[existingIndex] = {
+        ...results[existingIndex],
+        ...candidate,
+      };
+      return {index: existingIndex, inserted: false};
+    }
+    results.push(candidate);
+    return {index: results.length - 1, inserted: true};
+  }
+
+  async getNanobananaResultDataUrl(result) {
+    if (!result) return '';
+    if (result.imageDataUrl?.startsWith('data:')) {
+      return result.imageDataUrl;
+    }
+    if (result.imageUrl?.startsWith('data:')) {
+      result.imageDataUrl = result.imageUrl;
+      return result.imageDataUrl;
+    }
+    if (!result.imageUrl) return '';
+    result.imageDataUrl = await loadImageAsDataUrl(result.imageUrl);
+    return result.imageDataUrl;
+  }
+
   async generateNanobananaReference() {
     if (!this.lastScreenshotDataUrl) {
       this.setStatus('Capture a screenshot before generating a baseline image.');
@@ -1292,27 +1409,106 @@ export class Sam3dWorkspaceScene extends xb.Script {
           this.setStatus('Nano Banana completed but returned no image.');
           return;
         }
-        this.nanobananaResults.push({
+        const storedResult = {
           baselineId: baseline.baselineId,
           imageUrl: baseline.imageUrl,
           prompt: this.currentPrompt,
           sourceCaptureDataUrl: this.lastScreenshotDataUrl,
           savedAt: baseline.savedAt || Date.now(),
           metadata: baseline.metadata || {},
-        });
-        this.activeNanobananaResultIndex = this.nanobananaResults.length - 1;
+        };
+        const {index, inserted} = this.upsertNanobananaResult(this.nanobananaResults, storedResult);
+        this.activeNanobananaResultIndex = index;
         this.updateUserFlowUi();
-        this.setStatus('Nano Banana image generated.');
+        this.setStatus(inserted ? 'Nano Banana image generated.' : 'Nano Banana image refreshed.');
       },
       failedMessage: 'Nano Banana generation failed.',
     });
   }
 
+  async generateNanobananaComposite() {
+    if (!this.nanobananaResults.length) {
+      this.setStatus('Generate at least one reference image before creating a composite.');
+      return;
+    }
+
+    if (!this.currentPrompt) {
+      this.setStatus('Provide a prompt before generating a composite image.');
+      return;
+    }
+
+    const images = (await Promise.all(
+      this.nanobananaResults.map((result) => this.getNanobananaResultDataUrl(result))
+    )).filter(Boolean);
+
+    if (!images.length) {
+      this.setStatus('No valid reference images were available for the composite request.');
+      return;
+    }
+
+    const conditionedPrompt = buildConditionedNanobananaPrompt(this.currentPrompt, 'compose');
+
+    const job = await this.apiClient.createNanobananaGenerationJob({
+      sessionId: this.sessionId,
+      workspaceId: this.userFlowWorkspaceId || this.apiClient.workspaceId,
+      prompt: conditionedPrompt,
+      images,
+    });
+    this.setStatus('Nano Banana composite job queued: ' + job.jobId);
+    this.startPollingJob(job.jobId, {
+      jobLabel: 'Nano Banana Composite',
+      queueGroup: 'nanobanana-composite',
+      itemLabel: 'Composite',
+      runningVerb: 'generating',
+      onCompleted: async (update) => {
+        const baseline = update?.baseline;
+        if (!baseline?.imageUrl) {
+          this.setStatus('Nano Banana composite completed but returned no image.');
+          return;
+        }
+        const storedResult = {
+          baselineId: baseline.baselineId,
+          imageUrl: baseline.imageUrl,
+          prompt: this.currentPrompt,
+          savedAt: baseline.savedAt || Date.now(),
+          metadata: baseline.metadata || {},
+        };
+        const {index, inserted} = this.upsertNanobananaResult(this.nanobananaCompositeResults, storedResult);
+        this.activeNanobananaCompositeResultIndex = index;
+        this.updateUserFlowUi();
+        this.setStatus(inserted ? 'Nano Banana composite image generated.' : 'Nano Banana composite image refreshed.');
+      },
+      failedMessage: 'Nano Banana composite generation failed.',
+    });
+  }
+
+  enterNanobananaCompositeMode() {
+    if (!this.nanobananaResults.length) {
+      this.setStatus('Generate at least one reference image before moving to Composite.');
+      return;
+    }
+
+    this.nanobananaFlowMode = 'composite';
+    this.userFlowAwaitingPromptConfirmation = false;
+    this.confirmationTranscript = '';
+    this.recordingPurpose = 'prompt';
+    this.hideUserFlowCapturePreview();
+    this.updateUserFlowUi();
+    this.setStatus('Nano Banana composite mode. Record a prompt to combine all remaining reference images.');
+  }
+
   updateNanobananaFlowUi() {
     const waitingForConfirm = this.userFlowAwaitingPromptConfirmation;
-    const resultCount = this.nanobananaResults.length;
-    const hasResults = resultCount > 0;
-    const activeResult = this.getActiveNanobananaResult();
+    const isCompositeMode = this.isNanobananaCompositeMode();
+    const referenceCount = this.nanobananaResults.length;
+    const compositeCount = this.nanobananaCompositeResults.length;
+    const hasResults = isCompositeMode ? compositeCount > 0 : referenceCount > 0;
+    const activeReference = this.getActiveNanobananaResult();
+    const activeComposite = this.getActiveNanobananaCompositeResult();
+    const activeResult = isCompositeMode ? (activeComposite || activeReference) : activeReference;
+    const referenceGallerySources = isCompositeMode
+      ? this.nanobananaResults.map((result) => result?.imageUrl).filter(Boolean)
+      : [];
 
     const SLOT_PRIMARY_LEFT = 0;
     const SLOT_PRIMARY_RIGHT = 1;
@@ -1329,12 +1525,20 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.configureUserFlowButton(i, {visible: false});
     }
 
-    this.userFlowModeText.text = 'Nano Banana';
+    this.userFlowModeText.text = isCompositeMode ? 'Nano Banana Composite' : 'Nano Banana Generate';
     this.userFlowDetailText.text = waitingForConfirm
-      ? 'Prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.'
-      : hasResults
-        ? 'Reference images: ' + resultCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + resultCount + '.'
-        : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
+      ? (isCompositeMode
+          ? 'Composite prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.'
+          : 'Prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.')
+      : isCompositeMode
+        ? ('Reference images: ' + referenceCount + '\nComposite images: ' + compositeCount + (compositeCount
+            ? '\nActive composite ' + (this.activeNanobananaCompositeResultIndex + 1) + '/' + compositeCount + '.'
+            : referenceCount
+              ? '\nAll remaining reference images will be used.'
+              : '\nGenerate reference images first.'))
+        : referenceCount
+          ? 'Reference images: ' + referenceCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + referenceCount + '.'
+          : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
 
     this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
       text: this.isRecordingPrompt
@@ -1348,7 +1552,9 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
       text: 'Confirm',
-      backgroundColor: waitingForConfirm ? MODE_GENERATE_COLOR : '#1f2937',
+      backgroundColor: waitingForConfirm
+        ? (isCompositeMode ? MODE_COMPOSE_COLOR : MODE_GENERATE_COLOR)
+        : '#1f2937',
       onTriggered: () => this.confirmUserFlowGeneratePrompt(),
       visible: waitingForConfirm,
     });
@@ -1363,37 +1569,56 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.configureUserFlowButton(SLOT_PREVIOUS, {
       text: 'Previous',
       backgroundColor: hasResults ? '#334155' : '#1f2937',
-      onTriggered: () => this.stepNanobananaResult(-1),
+      onTriggered: () => isCompositeMode ? this.stepNanobananaCompositeResult(-1) : this.stepNanobananaResult(-1),
       visible: hasResults,
     });
 
     this.configureUserFlowButton(SLOT_NEXT, {
       text: 'Next',
       backgroundColor: hasResults ? '#334155' : '#1f2937',
-      onTriggered: () => this.stepNanobananaResult(1),
+      onTriggered: () => isCompositeMode ? this.stepNanobananaCompositeResult(1) : this.stepNanobananaResult(1),
       visible: hasResults,
     });
 
-    this.configureUserFlowButton(SLOT_MODE_FORWARD, {
-      text: 'To Composite',
-      backgroundColor: '#1f2937',
-      onTriggered: () => this.setStatus('Composite stage is the next Nano Banana step and is not implemented yet.'),
-    });
+    if (isCompositeMode) {
+      this.configureUserFlowButton(SLOT_MODE_BACK, {
+        text: 'To Generate',
+        backgroundColor: MODE_GENERATE_COLOR,
+        onTriggered: () => this.enterGenerateMode(),
+      });
+      this.configureUserFlowButton(SLOT_MODE_FORWARD, {
+        text: 'To 3D',
+        backgroundColor: MODE_COMPOSE_COLOR,
+        onTriggered: () => this.setStatus('Nano Banana to 3D is the next step and is not implemented yet.'),
+      });
+      this.configureUserFlowButton(SLOT_DELETE, {
+        text: 'Delete Image',
+        backgroundColor: compositeCount ? '#b91c1c' : '#1f2937',
+        onTriggered: () => this.deleteActiveNanobananaCompositeResult(),
+        visible: compositeCount > 0,
+      });
+    } else {
+      this.configureUserFlowButton(SLOT_MODE_FORWARD, {
+        text: 'To Composite',
+        backgroundColor: referenceCount ? MODE_COMPOSE_COLOR : '#1f2937',
+        onTriggered: () => this.enterNanobananaCompositeMode(),
+      });
+      this.configureUserFlowButton(SLOT_DELETE, {
+        text: 'Delete Image',
+        backgroundColor: referenceCount ? '#b91c1c' : '#1f2937',
+        onTriggered: () => this.deleteActiveNanobananaResult(),
+        visible: referenceCount > 0,
+      });
+      this.configureUserFlowButton(SLOT_RESET, {
+        text: 'Capture',
+        backgroundColor: '#0f766e',
+        onTriggered: () => this.captureScreenshot(),
+      });
+    }
 
-    this.configureUserFlowButton(SLOT_DELETE, {
-      text: 'Delete Image',
-      backgroundColor: hasResults ? '#b91c1c' : '#1f2937',
-      onTriggered: () => this.deleteActiveNanobananaResult(),
-      visible: hasResults,
-    });
+    this.updateUserFlowReferenceGallery(referenceGallerySources);
 
-    this.configureUserFlowButton(SLOT_RESET, {
-      text: 'Capture',
-      backgroundColor: '#0f766e',
-      onTriggered: () => this.captureScreenshot(),
-    });
-
-    if (waitingForConfirm && this.lastScreenshotDataUrl) {
+    if (waitingForConfirm && !isCompositeMode && this.lastScreenshotDataUrl) {
       this.userFlowPreviewPanel.visible = true;
       this.userFlowPreviewImage.load(this.lastScreenshotDataUrl);
     } else if (activeResult?.imageUrl) {
@@ -1402,6 +1627,26 @@ export class Sam3dWorkspaceScene extends xb.Script {
     } else if (this.userFlowPreviewPanel) {
       this.userFlowPreviewPanel.visible = false;
     }
+  }
+
+  updateUserFlowReferenceGallery(imageSources = []) {
+    if (!this.userFlowReferenceGalleryPanel || !this.userFlowReferenceGallerySlots) {
+      return;
+    }
+
+    const safeSources = Array.isArray(imageSources) ? imageSources.filter(Boolean) : [];
+    const hasSources = safeSources.length > 0;
+    this.userFlowReferenceGalleryPanel.visible = hasSources;
+
+    this.userFlowReferenceGallerySlots.forEach((slot, index) => {
+      const src = safeSources[index] || '';
+      slot.panel.visible = Boolean(src);
+      if (src) {
+        slot.image.load(src);
+      }
+    });
+
+    this.userFlowReferenceGalleryPanel.updateLayouts?.();
   }
 
   configureUserFlowButton(index, {
@@ -2365,7 +2610,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   async handleUserFlowPromptRecordingEnded() {
-    if (this.debugUiEnabled || (!this.baselineUiEnabled && this.userFlowMode !== 'generate') || (this.baselineUiEnabled && !this.isNanobananaReferenceMode())) {
+    if (this.debugUiEnabled || (!this.baselineUiEnabled && this.userFlowMode !== 'generate') || (this.baselineUiEnabled && !this.isNanobananaReferenceMode() && !this.isNanobananaCompositeMode())) {
       return;
     }
     if (!this.currentPrompt) {
@@ -2409,7 +2654,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowAwaitingPromptConfirmation = false;
     this.hideUserFlowCapturePreview();
     this.updateUserFlowUi();
-    await (this.baselineUiEnabled ? this.generateNanobananaReference() : this.generateAsset());
+    if (this.baselineUiEnabled) {
+      await (this.isNanobananaCompositeMode() ? this.generateNanobananaComposite() : this.generateNanobananaReference());
+      return;
+    }
+    await this.generateAsset();
   }
 
   cancelUserFlowGeneratePrompt() {
