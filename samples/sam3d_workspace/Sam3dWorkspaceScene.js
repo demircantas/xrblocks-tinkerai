@@ -167,6 +167,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowWorkspaceId = null;
     this.userFlowAwaitingPromptConfirmation = false;
     this.recordingPurpose = 'prompt';
+    this.promptCapturePrefix = '';
     this.confirmationTranscript = '';
     this.userCapturePreviewTimer = null;
     this.userFlowPromptCaptureTimer = null;
@@ -1715,6 +1716,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     const SLOT_PRIMARY_LEFT = 0;
     const SLOT_PRIMARY_RIGHT = 1;
+    const showAddPromptButton = waitingForConfirm && !is3dMode && !this.isKeyboardPromptFlowActive();
     const SLOT_PREVIOUS = 2;
     const SLOT_NEXT = 3;
     const SLOT_SECONDARY_LEFT = 4;
@@ -1759,6 +1761,13 @@ export class Sam3dWorkspaceScene extends xb.Script {
         : this.getUserFlowPromptActionLabel(waitingForConfirm),
       backgroundColor: is3dMode ? (meshCount > 1 ? '#334155' : '#1f2937') : '#9a3412',
       onTriggered: () => is3dMode ? this.stepActiveAsset(-1) : this.handleUserFlowRecordAction(),
+    });
+
+    this.configureUserFlowButton(SLOT_PRIMARY_RIGHT, {
+      text: 'Add Prompt',
+      backgroundColor: showAddPromptButton ? '#2563eb' : '#1f2937',
+      onTriggered: () => this.addUserFlowPromptDetails(),
+      visible: showAddPromptButton,
     });
 
     this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
@@ -2238,7 +2247,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
         return;
       }
 
-      this.currentPrompt = transcript || this.currentPrompt;
+      const transcriptText = transcript || '';
+      const combinedPrompt = this.promptCapturePrefix
+        ? (this.promptCapturePrefix + transcriptText).trim()
+        : transcriptText;
+      this.currentPrompt = combinedPrompt || this.currentPrompt;
       this.workspaceState.prompt = this.currentPrompt;
       if (this.promptKeyboard) {
         this.promptKeyboard.setText(this.currentPrompt);
@@ -2256,6 +2269,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     recognizer.addEventListener('error', (event) => {
       this.isRecordingPrompt = false;
       this.recordingPurpose = 'prompt';
+      this.promptCapturePrefix = '';
       this.clearUserFlowPromptCaptureSchedule();
       this.updateRecordButton();
       this.updateMicDiagnostics('Speech error: ' + event.error);
@@ -2267,6 +2281,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       const confirmationTranscript = this.confirmationTranscript;
       this.isRecordingPrompt = false;
       this.recordingPurpose = 'prompt';
+      this.promptCapturePrefix = '';
       this.updateRecordButton();
 
       if (this.debugUiEnabled || this.userFlowMode !== 'generate') {
@@ -2817,7 +2832,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     }
   }
 
-  togglePromptRecording(purpose = 'prompt') {
+  togglePromptRecording(purpose = 'prompt', {appendToExisting = false, scheduleCapture = null} = {}) {
     const recognizer = xb.core.sound.speechRecognizer;
     if (!recognizer) {
       this.setStatus('Speech recognition is unavailable in this browser.');
@@ -2832,10 +2847,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
     } else {
       this.recordingPurpose = purpose;
       this.confirmationTranscript = '';
+      this.promptCapturePrefix = purpose === 'prompt' && appendToExisting
+        ? ((this.currentPrompt || '').trim() ? (this.currentPrompt.trim() + ' ') : '')
+        : '';
       if (purpose === 'prompt') {
         this.userFlowAwaitingPromptConfirmation = false;
         this.updateUserFlowUi();
-        if (!this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())) {
+        const shouldScheduleCapture = scheduleCapture ?? (!this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode()));
+        if (shouldScheduleCapture) {
           this.scheduleUserFlowPromptCapture();
         } else {
           this.clearUserFlowPromptCaptureSchedule();
@@ -2848,9 +2867,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.setStatus(
         purpose === 'confirmation'
           ? 'Listening for yes or no...'
-          : !this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())
-            ? 'Listening for prompt... Screenshot will capture in 1 second.'
-            : 'Listening for prompt...'
+          : appendToExisting
+            ? 'Listening for additional prompt details...'
+            : !this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())
+              ? 'Listening for prompt... Screenshot will capture in 1 second.'
+              : 'Listening for prompt...'
       );
       recognizer.start();
     }
@@ -2867,6 +2888,14 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
     this.togglePromptRecording('prompt');
+  }
+
+  addUserFlowPromptDetails() {
+    if (this.isKeyboardPromptFlowActive()) {
+      this.startKeyboardPromptEntry();
+      return;
+    }
+    this.togglePromptRecording('prompt', {appendToExisting: true, scheduleCapture: false});
   }
 
   showUserFlowCapturePreview() {
