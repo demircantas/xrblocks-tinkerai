@@ -1287,13 +1287,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.confirmationTranscript = '';
     this.currentPrompt = '';
     this.syncCurrentPromptToUi();
-    if (!this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())) {
-      this.scheduleUserFlowPromptCapture();
-      this.setStatus('Type a prompt on the bluetooth keyboard. Screenshot will capture in 1 second, then press Enter.');
-    } else {
-      this.clearUserFlowPromptCaptureSchedule();
-      this.setStatus('Type a prompt on the bluetooth keyboard, then press Enter.');
-    }
+    this.setStatus('Type a prompt on the bluetooth keyboard, then press Enter.');
     this.updateUserFlowUi();
   }
 
@@ -1752,8 +1746,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
           : referenceCount
             ? 'Reference images: ' + referenceCount + '\nActive image ' + (this.activeNanobananaResultIndex + 1) + '/' + referenceCount + '.'
             : this.isKeyboardPromptFlowActive()
-              ? 'Reference images: 0\nType a prompt on the bluetooth keyboard, then press Enter to review it.'
-              : 'Reference images: 0\nPush to talk, then confirm to generate a baseline image.';
+              ? 'Reference images: 0\nCapture screen, type a prompt, then press Enter to review it.'
+              : 'Reference images: 0\nCapture screen, push to talk, then confirm to generate a baseline image.';
 
     this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
       text: is3dMode
@@ -1764,10 +1758,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
     });
 
     this.configureUserFlowButton(SLOT_PRIMARY_RIGHT, {
-      text: 'Add Prompt',
-      backgroundColor: showAddPromptButton ? '#2563eb' : '#1f2937',
-      onTriggered: () => this.addUserFlowPromptDetails(),
-      visible: showAddPromptButton,
+      text: waitingForConfirm ? 'Add Prompt' : 'Capture Screen',
+      backgroundColor: waitingForConfirm ? (showAddPromptButton ? '#2563eb' : '#1f2937') : '#0f766e',
+      onTriggered: () => waitingForConfirm ? this.addUserFlowPromptDetails() : this.handleUserFlowCaptureAction(),
+      visible: waitingForConfirm ? showAddPromptButton : !is3dMode && !isCompositeMode,
     });
 
     this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
@@ -1944,13 +1938,19 @@ export class Sam3dWorkspaceScene extends xb.Script {
       this.userFlowDetailText.text = waitingForConfirm
         ? `Prompt: ${this.currentPrompt || '(empty)'}\nReview the prompt, then confirm or cancel.`
         : this.isKeyboardPromptFlowActive()
-          ? `Generated assets: ${assetCount}\nType a prompt on the bluetooth keyboard, then press Enter to review it.`
-          : `Generated assets: ${assetCount}\nPush to talk, then review the prompt before generating.`;
+          ? `Generated assets: ${assetCount}\nCapture screen, type a prompt, then press Enter to review it.`
+          : `Generated assets: ${assetCount}\nCapture screen, push to talk, then review the prompt before generating.`;
 
       this.configureUserFlowButton(SLOT_PRIMARY_LEFT, {
         text: this.getUserFlowPromptActionLabel(waitingForConfirm),
         backgroundColor: '#9a3412',
         onTriggered: () => this.handleUserFlowRecordAction(),
+      });
+      this.configureUserFlowButton(SLOT_PRIMARY_RIGHT, {
+        text: 'Capture Screen',
+        backgroundColor: '#0f766e',
+        onTriggered: () => this.handleUserFlowCaptureAction(),
+        visible: !waitingForConfirm,
       });
       this.configureUserFlowButton(SLOT_SECONDARY_LEFT, {
         text: 'Confirm',
@@ -2808,10 +2808,15 @@ export class Sam3dWorkspaceScene extends xb.Script {
   }
 
   scheduleUserFlowPromptCapture() {
+    if (this.userFlowPromptCaptureTimer) {
+      this.setStatus('Capture is already scheduled.');
+      return;
+    }
     this.clearUserFlowPromptCaptureSchedule();
     this.userFlowPromptCapturePromise = new Promise((resolve) => {
       this.userFlowPromptCaptureResolve = resolve;
     });
+    this.setStatus('Capturing screen in 1 second...');
     this.userFlowPromptCaptureTimer = setTimeout(async () => {
       this.userFlowPromptCaptureTimer = null;
       try {
@@ -2853,7 +2858,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       if (purpose === 'prompt') {
         this.userFlowAwaitingPromptConfirmation = false;
         this.updateUserFlowUi();
-        const shouldScheduleCapture = scheduleCapture ?? (!this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode()));
+        const shouldScheduleCapture = scheduleCapture === true;
         if (shouldScheduleCapture) {
           this.scheduleUserFlowPromptCapture();
         } else {
@@ -2869,9 +2874,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
           ? 'Listening for yes or no...'
           : appendToExisting
             ? 'Listening for additional prompt details...'
-            : !this.debugUiEnabled && (this.userFlowMode === 'generate' || this.isNanobananaReferenceMode())
-              ? 'Listening for prompt... Screenshot will capture in 1 second.'
-              : 'Listening for prompt...'
+            : 'Listening for prompt...'
       );
       recognizer.start();
     }
@@ -2888,6 +2891,10 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
     this.togglePromptRecording('prompt');
+  }
+
+  handleUserFlowCaptureAction() {
+    this.scheduleUserFlowPromptCapture();
   }
 
   addUserFlowPromptDetails() {
