@@ -178,6 +178,8 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.currentJobId = null;
     this.pollHandle = null;
     this.isPollingJobs = false;
+    this.gizmoUiSuppressionActive = false;
+    this.gizmoUiSuppressionController = null;
     this.handledCompletedJobIds = new Set();
     this.activeJobs = new Map();
     this.jobGroupState = new Map();
@@ -1188,6 +1190,43 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setPanelInteractionEnabled(this.transformPanel, visible);
     this.setPanelInteractionEnabled(this.libraryPanel, visible);
     this.setPanelInteractionEnabled(this.userFlowPanel, !visible);
+  }
+
+  setWorkspaceUiSuppressed(suppressed, controller = null) {
+    if (
+      this.gizmoUiSuppressionActive === suppressed &&
+      (!suppressed || this.gizmoUiSuppressionController === controller)
+    ) {
+      return;
+    }
+
+    this.gizmoUiSuppressionActive = suppressed;
+    this.gizmoUiSuppressionController = suppressed ? controller : null;
+
+    if (suppressed) {
+      this.setPanelInteractionEnabled(this.mainPanel, false);
+      this.setPanelInteractionEnabled(this.selectionPanel, false);
+      this.setPanelInteractionEnabled(this.transformPanel, false);
+      this.setPanelInteractionEnabled(this.libraryPanel, false);
+      this.setPanelInteractionEnabled(this.userFlowPanel, false);
+      xb.user?.selectedObjectsForController?.delete?.(controller);
+      return;
+    }
+
+    this.setDebugPanelVisibility(this.debugUiEnabled);
+  }
+
+  updateTransformGizmoUiSuppression() {
+    const activeInteraction = this.transformGizmoController?.activeInteraction || null;
+    if (activeInteraction?.controller) {
+      this.setWorkspaceUiSuppressed(true, activeInteraction.controller);
+      xb.user?.selectedObjectsForController?.delete?.(activeInteraction.controller);
+      return;
+    }
+
+    if (this.gizmoUiSuppressionActive) {
+      this.setWorkspaceUiSuppressed(false, null);
+    }
   }
 
   getUserFlowModeLabel() {
@@ -4702,6 +4741,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
       }
     }
     this.transformGizmoController?.update();
+    this.updateTransformGizmoUiSuppression();
     this.rockGestureRecallController?.update();
     this.selectionController?.update();
     this.updateXrUiRayVisibility();
