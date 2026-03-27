@@ -1203,24 +1203,69 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.gizmoUiSuppressionActive = suppressed;
     this.gizmoUiSuppressionController = suppressed ? controller : null;
 
+    const panels = [
+      this.mainPanel,
+      this.selectionPanel,
+      this.transformPanel,
+      this.libraryPanel,
+      this.userFlowPanel,
+    ];
+
     if (suppressed) {
-      this.setPanelInteractionEnabled(this.mainPanel, false);
-      this.setPanelInteractionEnabled(this.selectionPanel, false);
-      this.setPanelInteractionEnabled(this.transformPanel, false);
-      this.setPanelInteractionEnabled(this.libraryPanel, false);
-      this.setPanelInteractionEnabled(this.userFlowPanel, false);
+      for (const panel of panels) {
+        if (!panel) continue;
+        if (!panel.userData) {
+          panel.userData = {};
+        }
+        if (!Object.prototype.hasOwnProperty.call(panel.userData, 'workspaceDraggableBeforeSuppress')) {
+          panel.userData.workspaceDraggableBeforeSuppress = !!panel.draggable;
+        }
+        panel.draggable = false;
+        this.setPanelInteractionEnabled(panel, false);
+      }
       xb.user?.selectedObjectsForController?.delete?.(controller);
       return;
+    }
+
+    for (const panel of panels) {
+      if (!panel) continue;
+      if (Object.prototype.hasOwnProperty.call(panel.userData || {}, 'workspaceDraggableBeforeSuppress')) {
+        panel.draggable = !!panel.userData.workspaceDraggableBeforeSuppress;
+        delete panel.userData.workspaceDraggableBeforeSuppress;
+      }
     }
 
     this.setDebugPanelVisibility(this.debugUiEnabled);
   }
 
-  updateTransformGizmoUiSuppression() {
+  findTransformGizmoSuppressionController() {
+    if (!xb.core?.renderer?.xr?.isPresenting || !xb.core?.input?.controllers?.length) {
+      return null;
+    }
+
     const activeInteraction = this.transformGizmoController?.activeInteraction || null;
     if (activeInteraction?.controller) {
-      this.setWorkspaceUiSuppressed(true, activeInteraction.controller);
-      xb.user?.selectedObjectsForController?.delete?.(activeInteraction.controller);
+      return activeInteraction.controller;
+    }
+
+    if (!this.transformGizmoController?.isControllerNearActiveTarget) {
+      return null;
+    }
+
+    for (const controller of xb.core.input.controllers) {
+      if (this.transformGizmoController.isControllerNearActiveTarget(controller, 1.3)) {
+        return controller;
+      }
+    }
+
+    return null;
+  }
+
+  updateTransformGizmoUiSuppression() {
+    const suppressionController = this.findTransformGizmoSuppressionController();
+    if (suppressionController) {
+      this.setWorkspaceUiSuppressed(true, suppressionController);
+      xb.user?.selectedObjectsForController?.delete?.(suppressionController);
       return;
     }
 
@@ -2187,6 +2232,25 @@ export class Sam3dWorkspaceScene extends xb.Script {
       return;
     }
 
+    if (this.gizmoUiSuppressionActive) {
+      for (const controller of xb.core.input.controllers) {
+        if (controller?.reticle) {
+          controller.reticle.visible = false;
+          controller.reticle.targetObject = undefined;
+          controller.reticle.intersection = undefined;
+        }
+        controller?.traverse?.((child) => {
+          const isControllerRayVisual =
+            child?.constructor?.name === 'ControllerRayVisual' ||
+            (child instanceof THREE.Line && child.geometry?.attributes?.position?.count === 2);
+          if (isControllerRayVisual) {
+            child.visible = false;
+          }
+        });
+      }
+      return;
+    }
+
     for (let i = 0; i < xb.core.input.controllers.length; i += 1) {
       const controller = xb.core.input.controllers[i];
       const intersections = xb.core.input.intersectionsForController?.get(controller) || [];
@@ -2210,6 +2274,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
         } else {
           controller.reticle.visible = false;
           controller.reticle.targetObject = undefined;
+          controller.reticle.intersection = undefined;
         }
       }
 

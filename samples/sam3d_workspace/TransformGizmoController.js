@@ -100,6 +100,18 @@ export class TransformGizmoController {
     return !!this.activeInteraction;
   }
 
+  isControllerNearActiveTarget(controller, distanceMultiplier = 1.3) {
+    if (!this.enabled || !this.target || !controller) {
+      return false;
+    }
+
+    controller.updateMatrixWorld(true);
+    controller.getWorldPosition(this.pointerWorldPosition);
+    const baseRadius = Math.max(this.root.scale.x || 0, MIN_GIZMO_RADIUS);
+    const suppressionRadius = baseRadius * Math.max(distanceMultiplier, 1);
+    return this.pointerWorldPosition.distanceTo(this.targetWorldPosition) <= suppressionRadius;
+  }
+
   onSelectStart(event) {
     if (!this.enabled || !this.target) return false;
     const hit = this.findHandleHit(event.target);
