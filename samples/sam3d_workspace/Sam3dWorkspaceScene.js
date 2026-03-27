@@ -208,6 +208,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.devUiSwitchHoldStartMs = 0;
     this.devUiSwitchHoldTriggered = false;
     this.devUiToggleKeyHandler = (event) => this.handleGlobalKeyDown(event);
+    this.initialUiTransforms = new Map();
   }
 
   createEmptyWorkspaceState() {
@@ -283,6 +284,27 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(new THREE.HemisphereLight(0xbbbbbb, 0x777788, 0.8));
   }
 
+  captureInitialUiTransform(key, object3D) {
+    if (!key || !object3D) return;
+    this.initialUiTransforms.set(key, {
+      position: object3D.position.clone(),
+      quaternion: object3D.quaternion.clone(),
+      scale: object3D.scale.clone(),
+    });
+  }
+
+  restoreInitialUiTransform(key, object3D) {
+    if (!key || !object3D) return false;
+    const transform = this.initialUiTransforms.get(key);
+    if (!transform) return false;
+    object3D.position.copy(transform.position);
+    object3D.quaternion.copy(transform.quaternion);
+    object3D.scale.copy(transform.scale);
+    object3D.updateMatrix();
+    object3D.updateMatrixWorld(true);
+    return true;
+  }
+
   createWorkspaceUI() {
     this.mainPanel = new xb.SpatialPanel({
       width: 0.62,
@@ -297,6 +319,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(this.mainPanel);
     this.mainPanel.userData.isWorkspaceUiRoot = true;
 
+    this.captureInitialUiTransform('mainPanel', this.mainPanel);
     const mainGrid = this.mainPanel.addGrid();
 
     mainGrid.addRow({weight: 0.08}).addText({
@@ -516,6 +539,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(this.selectionPanel);
     this.selectionPanel.userData.isWorkspaceUiRoot = true;
 
+    this.captureInitialUiTransform('selectionPanel', this.selectionPanel);
     const selectionGrid = this.selectionPanel.addGrid();
     selectionGrid.addRow({weight: 0.12}).addText({
       text: 'Selection Tools',
@@ -606,6 +630,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(this.transformPanel);
     this.transformPanel.userData.isWorkspaceUiRoot = true;
 
+    this.captureInitialUiTransform('transformPanel', this.transformPanel);
     const transformGrid = this.transformPanel.addGrid();
     transformGrid.addRow({weight: 0.12}).addText({
       text: 'Transform',
@@ -788,6 +813,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(this.libraryPanel);
     this.libraryPanel.userData.isWorkspaceUiRoot = true;
 
+    this.captureInitialUiTransform('libraryPanel', this.libraryPanel);
     const libraryGrid = this.libraryPanel.addGrid();
     libraryGrid.addRow({weight: 0.12}).addText({
       text: 'Asset Catalog',
@@ -1000,6 +1026,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.add(this.userFlowPanel);
     this.userFlowPanel.userData.isWorkspaceUiRoot = true;
 
+    this.captureInitialUiTransform('userFlowPanel', this.userFlowPanel);
     const userGrid = this.userFlowPanel.addGrid();
     this.userFlowModeText = userGrid.addRow({weight: 0.1}).addText({
       text: 'Generate',
@@ -2231,6 +2258,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.promptKeyboard.userData.isWorkspaceUiRoot = true;
     this.promptKeyboard.visible = false;
     this.promptKeyboard.position.set(0, -0.42, 0.1);
+    this.captureInitialUiTransform('promptKeyboard', this.promptKeyboard);
     this.promptKeyboard.setText(this.currentPrompt);
     this.setPromptKeyboardInteractionEnabled(false);
 
@@ -4833,6 +4861,48 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.updateSelectionUi();
     this.refreshPromptText();
     this.setStatus('Workspace reset.');
+  }
+
+  resetWorkspaceUiPanelPositions() {
+    this.restoreInitialUiTransform('mainPanel', this.mainPanel);
+    this.restoreInitialUiTransform('selectionPanel', this.selectionPanel);
+    this.restoreInitialUiTransform('transformPanel', this.transformPanel);
+    this.restoreInitialUiTransform('libraryPanel', this.libraryPanel);
+    this.restoreInitialUiTransform('userFlowPanel', this.userFlowPanel);
+    this.restoreInitialUiTransform('promptKeyboard', this.promptKeyboard);
+  }
+
+  restoreUiAfterXrSessionChange(statusText = null) {
+    this.clearDevUiSwitchHold();
+    this.gizmoUiSuppressionActive = false;
+    this.gizmoUiSuppressionController = null;
+    this.resetWorkspaceUiPanelPositions();
+    this.setDebugPanelVisibility(this.debugUiEnabled);
+    this.refreshCatalogUi();
+    this.refreshWorkspaceCatalogUi();
+    this.refreshWorkspaceStatusText();
+    this.updateMicDiagnostics();
+    this.updateSelectionUi();
+    this.updateTransformUi();
+    this.refreshPromptText();
+    this.syncSelectionController();
+    this.syncTransformGizmo();
+    if (this.promptKeyboard) {
+      this.promptKeyboard.setText(this.currentPrompt);
+    }
+    this.setPromptKeyboardInteractionEnabled(this.isPromptEditorOpen);
+    this.updateUserFlowUi();
+    if (statusText) {
+      this.setStatus(statusText);
+    }
+  }
+
+  onXRSessionStarted() {
+    this.restoreUiAfterXrSessionChange('XR session resumed. UI refreshed.');
+  }
+
+  onXRSessionEnded() {
+    this.restoreUiAfterXrSessionChange('Exited XR. UI refreshed.');
   }
 
   onSelectStart(event) {
