@@ -5,7 +5,7 @@ import {MarchingCubes} from 'three/addons/objects/MarchingCubes.js';
 const DEFAULT_PROXIMITY = 0.03;
 const DEFAULT_SELECTION_BRUSH_RADIUS = 0.08;
 const DEFAULT_VISUAL_BRUSH_RADIUS = 0.08;
-const DEFAULT_STAMP_INTERVAL_MS = 70;
+const DEFAULT_STAMP_INTERVAL_MS = 12;
 const DEFAULT_SAMPLE_STEP_DISTANCE = 0.015;
 const MIN_BRUSH_RADIUS = 0.02;
 const MAX_BRUSH_RADIUS = 0.3;
@@ -19,6 +19,11 @@ const USE_DEBUG_SPHERE_BRUSH = true;
 const DEBUG_SPHERE_INITIAL_CAPACITY = 64;
 const DEBUG_SPHERE_WIDTH_SEGMENTS = 8;
 const DEBUG_SPHERE_HEIGHT_SEGMENTS = 6;
+const MIN_STROKE_POINT_DISTANCE = 0.001;
+const STROKE_FILTER_MIN_ALPHA = 0.18;
+const STROKE_FILTER_MAX_ALPHA = 0.72;
+const STROKE_TURN_MAX_ANGLE = Math.PI * 0.5;
+const STROKE_SPEED_REFERENCE = 0.45;
 
 const MAX_IDLE_PREVIEW_SPHERES = 2;
 const IDLE_PREVIEW_POSITION_EPSILON = 0.001;
@@ -74,6 +79,7 @@ export class MeshSelectionController {
     this.sculptBoundsSize = 1;
     this.lastStampTimeMs = 0;
     this.lastStatusTimeMs = 0;
+    this.filteredStrokePoint = null;
 
     this._tmpRotation = new THREE.Matrix4();
     this._tmpScale = new THREE.Vector3();
@@ -127,6 +133,7 @@ export class MeshSelectionController {
     this.selectedVertexCount = 0;
     this.strokeWorldPoints = [];
     this.visualStrokePoints = [];
+    this.filteredStrokePoint = null;
   }
 
   findContentRoot(model) {
@@ -214,6 +221,7 @@ export class MeshSelectionController {
       this.isPinching = false;
       this.activePinchSource = null;
       this.strokeWorldPoints = [];
+      this.filteredStrokePoint = null;
       this.clearSculptMesh();
     }
     this.applyModelInteractionPolicy();
@@ -372,12 +380,67 @@ export class MeshSelectionController {
     return target;
   }
 
-  getVisualPointSpacing() {
-    return Math.max(this.visualBrushRadius * 0.3, this.sampleStepDistance * 0.9);
+  getStrokeSpeed(distance, deltaTimeMs) {
+    const safeDtSeconds = Math.max(deltaTimeMs, 1) / 1000;
+    return distance / safeDtSeconds;
   }
 
-  appendVisualStrokePoint(point) {
-    const spacing = this.getVisualPointSpacing();
+  getAdaptiveSpacing({radius, speed, slowFactor, fastFactor, turnAngle = 0, minimum = 0}) {
+    const speedT = THREE.MathUtils.clamp(speed / STROKE_SPEED_REFERENCE, 0, 1);
+    const baseSpacing = THREE.MathUtils.lerp(radius * slowFactor, radius * fastFactor, speedT);
+    const turnT = THREE.MathUtils.clamp(turnAngle / STROKE_TURN_MAX_ANGLE, 0, 1);
+    const turnMultiplier = THREE.MathUtils.lerp(1, 0.5, turnT);
+    return Math.max(baseSpacing * turnMultiplier, minimum);
+  }
+
+  getVisualPointSpacing(speed = 0, turnAngle = 0) {
+    return this.getAdaptiveSpacing({
+      radius: this.visualBrushRadius,
+      speed,
+      turnAngle,
+      slowFactor: 0.06,
+      fastFactor: 0.22,
+      minimum: this.sampleStepDistance * 0.08,
+    });
+  }
+
+  getSelectionPointSpacing(speed = 0, turnAngle = 0) {
+    return this.getAdaptiveSpacing({
+      radius: this.selectionBrushRadius,
+      speed,
+      turnAngle,
+      slowFactor: 0.14,
+      fastFactor: 0.34,
+      minimum: this.sampleStepDistance * 0.18,
+    });
+  }
+
+  getStrokeTurnAngle(nextPoint) {
+    if (this.strokeWorldPoints.length < 2) return 0;
+    const prevPoint = this.strokeWorldPoints[this.strokeWorldPoints.length - 1];
+    const prevPrevPoint = this.strokeWorldPoints[this.strokeWorldPoints.length - 2];
+    const v1 = prevPoint.clone().sub(prevPrevPoint);
+    const v2 = nextPoint.clone().sub(prevPoint);
+    if (v1.lengthSq() < 1e-8 || v2.lengthSq() < 1e-8) return 0;
+    return v1.angleTo(v2);
+  }
+
+  filterStrokePoint(worldPoint, deltaTimeMs) {
+    if (!this.filteredStrokePoint) {
+      this.filteredStrokePoint = worldPoint.clone();
+      return this.filteredStrokePoint.clone();
+    }
+
+    const distance = this.filteredStrokePoint.distanceTo(worldPoint);
+    const speed = this.getStrokeSpeed(distance, deltaTimeMs);
+    const speedT = THREE.MathUtils.clamp(speed / STROKE_SPEED_REFERENCE, 0, 1);
+    const alpha = THREE.MathUtils.lerp(STROKE_FILTER_MIN_ALPHA, STROKE_FILTER_MAX_ALPHA, speedT);
+    this.filteredStrokePoint.lerp(worldPoint, alpha);
+    return this.filteredStrokePoint.clone();
+  }
+
+  appendVisualStrokePoint(point, speed = 0, turnAngle = 0) {
+    const spacing = this.getVisualPointSpacing(speed, turnAngle);
     const lastPoint = this.visualStrokePoints[this.visualStrokePoints.length - 1];
     if (lastPoint && lastPoint.distanceToSquared(point) < spacing * spacing) {
       return;
@@ -668,12 +731,13 @@ export class MeshSelectionController {
     this.sculptMesh.update();
   }
 
-  appendStrokePoint(worldPoint) {
+  appendStrokePoint(worldPoint, deltaTimeMs = this.stampIntervalMs) {
+    const filteredPoint = this.filterStrokePoint(worldPoint, deltaTimeMs);
     if (!this.strokeWorldPoints.length) {
-      const point = worldPoint.clone();
+      const point = filteredPoint.clone();
       this.strokeWorldPoints.push(point);
       if (USE_DEBUG_SPHERE_BRUSH) {
-        this.appendVisualStrokePoint(point);
+        this.appendVisualStrokePoint(point, 0, 0);
       } else {
         this.rebuildSculptMesh();
       }
@@ -681,17 +745,20 @@ export class MeshSelectionController {
     }
 
     const lastPoint = this.strokeWorldPoints[this.strokeWorldPoints.length - 1];
-    const distance = lastPoint.distanceTo(worldPoint);
-    if (distance < 0.002) return;
+    const distance = lastPoint.distanceTo(filteredPoint);
+    if (distance < MIN_STROKE_POINT_DISTANCE) return;
 
-    const steps = Math.max(1, Math.ceil(distance / this.sampleStepDistance));
+    const speed = this.getStrokeSpeed(distance, deltaTimeMs);
+    const turnAngle = this.getStrokeTurnAngle(filteredPoint);
+    const spacing = this.getSelectionPointSpacing(speed, turnAngle);
+    const steps = Math.max(1, Math.ceil(distance / spacing));
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      this._tmpInterpPoint.copy(lastPoint).lerp(worldPoint, t);
+      this._tmpInterpPoint.copy(lastPoint).lerp(filteredPoint, t);
       const point = this._tmpInterpPoint.clone();
       this.strokeWorldPoints.push(point);
       if (USE_DEBUG_SPHERE_BRUSH) {
-        this.appendVisualStrokePoint(point);
+        this.appendVisualStrokePoint(point, speed, turnAngle);
       }
     }
     if (!USE_DEBUG_SPHERE_BRUSH) {
@@ -933,7 +1000,8 @@ export class MeshSelectionController {
 
     this.hideIdlePreviewSpheres();
     this.setBrushVisualIdle(false);
-    this.appendStrokePoint(worldPoint);
+    const deltaTimeMs = force ? this.stampIntervalMs : Math.max(now - this.lastStampTimeMs, 1);
+    this.appendStrokePoint(worldPoint, deltaTimeMs);
     this.lastStampTimeMs = now;
   }
 
@@ -943,6 +1011,7 @@ export class MeshSelectionController {
     this.activePinchSource = event.target;
     this.strokeWorldPoints = [];
     this.visualStrokePoints = [];
+    this.filteredStrokePoint = null;
     this.ensureSculptMesh();
     this.sampleDrawFromSource(event.target, true);
   }
@@ -959,6 +1028,7 @@ export class MeshSelectionController {
     if (!this.activePinchSource || event.target === this.activePinchSource) {
       this.isPinching = false;
       this.activePinchSource = null;
+      this.filteredStrokePoint = null;
 
       const didChange = this.applyStrokeToSelection();
       this.clearSculptMesh();
