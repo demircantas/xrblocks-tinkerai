@@ -1238,6 +1238,37 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.setDebugPanelVisibility(this.debugUiEnabled);
   }
 
+  isControllerNearActiveSelectionTarget(controller, distanceMultiplier = 1.3) {
+    if (!this.isSelectionMode || !this.activeAssetId || !controller) {
+      return false;
+    }
+
+    const previewModel = this.getAssetPreviewModel(this.activeAssetId);
+    const contentRoot = this.findModelContentRoot(previewModel) || previewModel;
+    if (!contentRoot) {
+      return false;
+    }
+
+    const bounds = new THREE.Box3().setFromObject(contentRoot);
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    const controllerWorldPosition = new THREE.Vector3();
+
+    if (bounds.isEmpty()) {
+      return false;
+    }
+
+    bounds.getCenter(center);
+    bounds.getSize(size);
+    const maxDimension = Math.max(size.x, size.y, size.z);
+    const baseRadius = THREE.MathUtils.clamp(maxDimension * 0.6, 0.09, 0.42);
+    const suppressionRadius = baseRadius * Math.max(distanceMultiplier, 1);
+
+    controller.updateMatrixWorld(true);
+    controller.getWorldPosition(controllerWorldPosition);
+    return controllerWorldPosition.distanceTo(center) <= suppressionRadius;
+  }
+
   findTransformGizmoSuppressionController() {
     if (!xb.core?.renderer?.xr?.isPresenting || !xb.core?.input?.controllers?.length) {
       return null;
@@ -1246,6 +1277,15 @@ export class Sam3dWorkspaceScene extends xb.Script {
     const activeInteraction = this.transformGizmoController?.activeInteraction || null;
     if (activeInteraction?.controller) {
       return activeInteraction.controller;
+    }
+
+    if (this.isSelectionMode) {
+      for (const controller of xb.core.input.controllers) {
+        if (this.isControllerNearActiveSelectionTarget(controller, 1.3)) {
+          return controller;
+        }
+      }
+      return null;
     }
 
     if (!this.transformGizmoController?.isControllerNearActiveTarget) {
