@@ -28,6 +28,10 @@ export interface HasDraggingMode {
   draggingMode: DragMode;
 }
 
+type MaybeHasIgnoreReticleRaycast = {
+  ignoreReticleRaycast?: boolean;
+};
+
 export class DragManager extends Script {
   static readonly dependencies = {input: Input, camera: THREE.Camera};
   static readonly IDLE = 'IDLE';
@@ -61,7 +65,21 @@ export class DragManager extends Script {
 
   onSelectStart(event: SelectEvent) {
     const controller = event.target;
-    const intersections = this.input.intersectionsForController.get(controller);
+    const intersections = this.input.intersectionsForController
+      .get(controller)
+      ?.filter((intersection) => {
+        let target: THREE.Object3D | null = intersection.object;
+        while (target) {
+          if (
+            (target as MaybeHasIgnoreReticleRaycast).ignoreReticleRaycast ===
+            true
+          ) {
+            return false;
+          }
+          target = target.parent;
+        }
+        return true;
+      });
     if (intersections && intersections.length > 0) {
       this.beginDragging(intersections[0], controller);
     }
