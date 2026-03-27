@@ -15,6 +15,7 @@ export interface Draggable extends THREE.Object3D {
   // Whether to continuously face the camera as the user drags.
   // If unspecified, defaults to false.
   dragFacingCamera?: boolean;
+  dragHoldDelayMs?: number;
 }
 
 export enum DragMode {
@@ -52,6 +53,11 @@ export class DragManager extends Script {
   private originalScalingObjectScale = new THREE.Vector3();
   private intersection?: THREE.Intersection;
   private draggableObject?: Draggable;
+  private pendingDrag?: {
+    intersection: THREE.Intersection;
+    controller: THREE.Object3D;
+    startedAtMs: number;
+  };
   private input!: Input;
   private camera!: THREE.Camera;
   type = 'DragManager';
@@ -81,22 +87,68 @@ export class DragManager extends Script {
         return true;
       });
     if (intersections && intersections.length > 0) {
+      const [draggableObject, draggingMode] =
+        this.findDraggableObjectAndDraggingMode(intersections[0].object);
+      const dragHoldDelayMs = draggableObject?.dragHoldDelayMs ?? 0;
+      if (
+        draggableObject != null &&
+        draggingMode != null &&
+        draggingMode != DragManager.DO_NOT_DRAG &&
+        dragHoldDelayMs > 0
+      ) {
+        this.pendingDrag = {
+          intersection: intersections[0],
+          controller,
+          startedAtMs: performance.now(),
+        };
+        return;
+      }
       this.beginDragging(intersections[0], controller);
     }
   }
-
   onSelectEnd() {
     this.mode = DragManager.IDLE;
     this.intersection = undefined;
     this.draggableObject = undefined;
+    this.pendingDrag = undefined;
   }
-
   update() {
+    this.updatePendingDrag();
     for (const controller of this.input.controllers) {
       this.updateDragging(controller);
     }
   }
 
+  private updatePendingDrag() {
+    if (!this.pendingDrag || this.mode != DragManager.IDLE) {
+      return;
+    }
+
+    const {controller, intersection, startedAtMs} = this.pendingDrag;
+    if (!(controller as THREE.Object3D & {userData?: {selected?: boolean}}).userData?.selected) {
+      this.pendingDrag = undefined;
+      return;
+    }
+
+    const [draggableObject, draggingMode] =
+      this.findDraggableObjectAndDraggingMode(intersection.object);
+    const dragHoldDelayMs = draggableObject?.dragHoldDelayMs ?? 0;
+    if (
+      draggableObject == null ||
+      draggingMode == null ||
+      draggingMode == DragManager.DO_NOT_DRAG
+    ) {
+      this.pendingDrag = undefined;
+      return;
+    }
+
+    if (performance.now() - startedAtMs < dragHoldDelayMs) {
+      return;
+    }
+
+    this.pendingDrag = undefined;
+    this.beginDragging(intersection, controller);
+  }
   beginDragging(intersection: THREE.Intersection, controller: THREE.Object3D) {
     const [draggableObject, draggingMode] =
       this.findDraggableObjectAndDraggingMode(intersection.object);

@@ -318,6 +318,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.mainPanel.position.set(-0.36, xb.user.height + 0.03, -0.9);
     this.add(this.mainPanel);
     this.mainPanel.userData.isWorkspaceUiRoot = true;
+    this.mainPanel.dragHoldDelayMs = 500;
 
     this.captureInitialUiTransform('mainPanel', this.mainPanel);
     const mainGrid = this.mainPanel.addGrid();
@@ -538,6 +539,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.selectionPanel.position.set(0.34, xb.user.height + 0.22, -0.82);
     this.add(this.selectionPanel);
     this.selectionPanel.userData.isWorkspaceUiRoot = true;
+    this.selectionPanel.dragHoldDelayMs = 500;
 
     this.captureInitialUiTransform('selectionPanel', this.selectionPanel);
     const selectionGrid = this.selectionPanel.addGrid();
@@ -629,6 +631,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.transformPanel.position.set(-0.01, xb.user.height - 0.22, -0.82);
     this.add(this.transformPanel);
     this.transformPanel.userData.isWorkspaceUiRoot = true;
+    this.transformPanel.dragHoldDelayMs = 500;
 
     this.captureInitialUiTransform('transformPanel', this.transformPanel);
     const transformGrid = this.transformPanel.addGrid();
@@ -812,6 +815,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.libraryPanel.position.set(0.34, xb.user.height - 0.26, -0.82);
     this.add(this.libraryPanel);
     this.libraryPanel.userData.isWorkspaceUiRoot = true;
+    this.libraryPanel.dragHoldDelayMs = 500;
 
     this.captureInitialUiTransform('libraryPanel', this.libraryPanel);
     const libraryGrid = this.libraryPanel.addGrid();
@@ -1025,6 +1029,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowPanel.position.set(0, xb.user.height, -0.82);
     this.add(this.userFlowPanel);
     this.userFlowPanel.userData.isWorkspaceUiRoot = true;
+    this.userFlowPanel.dragHoldDelayMs = 500;
 
     this.captureInitialUiTransform('userFlowPanel', this.userFlowPanel);
     const userGrid = this.userFlowPanel.addGrid();
