@@ -2227,6 +2227,25 @@ export class Sam3dWorkspaceScene extends xb.Script {
     return false;
   }
 
+  isValidReticleTargetObject(target) {
+    let current = target;
+    while (current) {
+      if (current.ignoreReticleRaycast === true) {
+        return false;
+      }
+      current = current.parent;
+    }
+    return true;
+  }
+
+  findFirstValidUiIntersection(controller) {
+    const intersections = xb.core.input.intersectionsForController?.get(controller) || [];
+    return intersections.find((intersection) => {
+      const target = intersection?.object;
+      return this.isUiTargetObject(target) && this.isValidReticleTargetObject(target);
+    }) || null;
+  }
+
   updateXrUiRayVisibility() {
     if (!xb.core?.renderer?.xr?.isPresenting || !xb.core?.input?.controllers) {
       return;
@@ -2253,8 +2272,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
 
     for (let i = 0; i < xb.core.input.controllers.length; i += 1) {
       const controller = xb.core.input.controllers[i];
-      const intersections = xb.core.input.intersectionsForController?.get(controller) || [];
-      const uiIntersection = intersections.find((intersection) => this.isUiTargetObject(intersection?.object));
+      const uiIntersection = this.findFirstValidUiIntersection(controller);
       const uiTargeted = !!uiIntersection;
 
       if (controller?.reticle) {
