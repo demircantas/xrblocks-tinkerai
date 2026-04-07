@@ -119,6 +119,16 @@ function loadImageIfChanged(imageView, src = '') {
   imageView.load(nextSrc);
 }
 
+function truncatePromptPreview(prompt, maxLength = 32) {
+  const normalized = (prompt || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '(empty)';
+  if (normalized.length <= maxLength) return normalized;
+  const truncated = normalized.slice(0, maxLength).trim();
+  const lastSpace = truncated.lastIndexOf(' ');
+  const preview = lastSpace > maxLength * 0.5 ? truncated.slice(0, lastSpace) : truncated;
+  return preview.replace(/[.,;:!?-]+$/, '').trim() + '...';
+}
+
 function normalizeTransformMatrix(assetRecord) {
   return assetRecord?.transformMatrix || assetRecord?.transform || null;
 }
@@ -1461,7 +1471,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowAwaitingPromptConfirmation = true;
     this.showUserFlowCapturePreview();
     this.updateUserFlowUi();
-    this.setStatus('I read "' + this.currentPrompt + '". Review it, then Confirm or Cancel.');
+    this.setStatus('I read "' + truncatePromptPreview(this.currentPrompt) + '". Review it, then Confirm or Cancel.');
   }
 
   cancelKeyboardPromptEntry(statusText = 'Typed prompt cancelled.') {
@@ -1885,10 +1895,11 @@ export class Sam3dWorkspaceScene extends xb.Script {
       : isCompositeMode
         ? 'Nano Banana Composite'
         : 'Nano Banana Generate';
+    const promptPreview = truncatePromptPreview(this.currentPrompt);
     this.userFlowDetailText.text = waitingForConfirm
       ? (isCompositeMode
-          ? 'Composite prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.'
-          : 'Prompt: ' + (this.currentPrompt || '(empty)') + '\nReview the prompt, then confirm or cancel.')
+          ? 'Composite prompt: ' + promptPreview + '\nReview the prompt, then confirm or cancel.'
+          : 'Prompt: ' + promptPreview + '\nReview the prompt, then confirm or cancel.')
       : is3dMode
         ? (meshCount
             ? this.getActiveAssetOrdinalText() + '\nUse the gizmo to move, rotate, or scale the active mesh.'
@@ -3141,7 +3152,7 @@ export class Sam3dWorkspaceScene extends xb.Script {
     this.userFlowAwaitingPromptConfirmation = true;
     this.showUserFlowCapturePreview();
     this.updateUserFlowUi();
-    this.setStatus('I heard "' + this.currentPrompt + '". Review it, then Confirm or Cancel.');
+    this.setStatus('I heard "' + truncatePromptPreview(this.currentPrompt) + '". Review it, then Confirm or Cancel.');
   }
 
   handleUserFlowConfirmationTranscript(transcript = '') {
