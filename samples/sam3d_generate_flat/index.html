@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>SAM3D Flatscreen Generate</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <main class="app-shell">
+      <section class="control-panel">
+        <p class="eyebrow">SAM3D Flatscreen Utility</p>
+        <h1>Generate a 3D model from an image and prompt.</h1>
+        <p class="lede">
+          Upload a reference image, describe the object to extract or generate,
+          then send the request to the SAM3D backend.
+        </p>
+
+        <form id="generate-form" class="generate-form">
+          <label class="field">
+            <span>Backend URL</span>
+            <input
+              id="backend-url"
+              type="url"
+              placeholder="http://localhost:8790"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="field">
+            <span>Prompt</span>
+            <textarea
+              id="prompt"
+              rows="5"
+              placeholder="Create a single clean 3D model of the mug in this image."
+              required
+            ></textarea>
+          </label>
+
+          <label class="file-drop" for="image-file">
+            <input id="image-file" type="file" accept="image/*" required />
+            <span class="file-title">Choose image</span>
+            <span id="file-name" class="file-name">PNG or JPG reference image</span>
+          </label>
+
+          <button id="generate-button" class="primary-action" type="submit">
+            Generate model
+          </button>
+        </form>
+
+        <div class="status-card">
+          <div class="status-row">
+            <span id="status-label">Idle</span>
+            <span id="progress-label">0%</span>
+          </div>
+          <progress id="progress" value="0" max="1"></progress>
+          <p id="status-message">Upload an image and enter a prompt to begin.</p>
+        </div>
+
+        <a id="download-link" class="download-action disabled" href="#" download>
+          Download GLB
+        </a>
+      </section>
+
+      <section class="preview-panel">
+        <div class="image-preview-card">
+          <img id="image-preview" alt="Uploaded image preview" />
+          <p id="image-placeholder">Image preview</p>
+        </div>
+        <div id="viewer" class="viewer">
+          <p id="viewer-placeholder">Generated model preview</p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
